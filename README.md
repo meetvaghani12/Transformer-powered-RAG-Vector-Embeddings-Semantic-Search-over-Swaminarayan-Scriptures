@@ -4,8 +4,8 @@
  ✦  ॐ  ✦
 ```
 
-# Vachanamrut Intelligence Engine
-### *Retrieval-Enhanced Spiritual Advisory System*
+# AksharAI
+### *Transformer-powered RAG · Vector Embeddings · Semantic Search over Swaminarayan Scriptures*
 
 [![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-blue?style=flat-square&logo=python)](https://python.org)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.110-009688?style=flat-square&logo=fastapi)](https://fastapi.tiangolo.com)
