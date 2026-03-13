@@ -75,6 +75,12 @@
 ║      │    All passages with score ≥ 0.65, sorted by relevance       ║
 ║      │                                                              ║
 ║      ▼                                                              ║
+║  Rolling Summary Context Injection                                  ║
+║      │    Message 1 → no history (raw)                              ║
+║      │    Message 2+ → summary of all previous messages injected    ║
+║      │    Summary kept to ~100 tokens via /summarize endpoint        ║
+║      │                                                              ║
+║      ▼                                                              ║
 ║  Step 1 — English Answer Generation                                 ║
 ║      │    qwen2.5:3b via Ollama (local, no API key)                 ║
 ║      │    repeat_penalty=1.3 to prevent repetition loops            ║
@@ -83,6 +89,10 @@
 ║  Step 2 — Translation (only if GU / HI requested)                   ║
 ║      │    llama3:8b via Ollama (better multilingual support)        ║
 ║      │    Separate translation pass — prevents generation loops     ║
+║      │                                                              ║
+║      ▼                                                              ║
+║  Background: /summarize updates chat summary for next question      ║
+║      │    Runs async — zero latency impact on current response      ║
 ║      │                                                              ║
 ║      ▼                                                              ║
 ║  Grounded Answer + Full Source Attribution                          ║
@@ -167,6 +177,23 @@ The frontend is a full-screen ChatGPT-style interface built with Next.js 16 and 
 Instead of always returning exactly 4 documents per book, the system queries up to 50 candidates per book and filters by **cosine similarity score ≥ 0.65**. This means:
 - High-relevance queries return many grounded sources
 - Low-relevance queries return fewer (or zero) sources rather than hallucinated ones
+
+### Rolling Summary Context
+
+AksharAI maintains conversation memory using a **rolling summary** approach:
+
+```
+Message 1:  RAG passages + Q1                              → Answer 1
+            ↓ background: summarize(Q1 + A1) → "User asked about maya..."
+Message 2:  RAG passages + Summary + Q2                    → Answer 2
+            ↓ background: summarize(Q1+A1+Q2+A2) → updated summary
+Message 3:  RAG passages + Summary + Q3                    → Answer 3
+```
+
+- The LLM understands follow-up questions like "How can one overcome **it**?" — resolving "it" from context
+- Summary stays ~100 tokens regardless of chat length — no token limit risk
+- Summarization runs **in the background** after each answer — zero latency impact
+- Scripture references (e.g. `Vachnamrut GI-1`) are preserved verbatim in the summary
 
 ### 2-Step Translation Architecture
 Small local models (3B parameters) are unstable when generating non-Latin scripts directly — they enter repetition loops. AksharAI solves this by:
@@ -305,6 +332,7 @@ npm run dev
 |---|---|---|
 | `query` | `string` | Any spiritual/philosophical question |
 | `language` | `string` | `"english"` · `"gujarati"` · `"hindi"` |
+| `history` | `string` | Rolling summary from `/summarize` — empty string for first message |
 
 **Response:**
 ```json
@@ -324,6 +352,29 @@ npm run dev
     }
   ],
   "total_matches": { "vachnamrut": 3, "swamini_vato": 5, "total": 8 }
+}
+```
+
+---
+
+### `POST /summarize`
+
+Summarizes a conversation into 2-3 sentences for use as context in the next question.
+
+**Request:**
+```json
+{
+  "messages": [
+    {"role": "user", "content": "What is maya?"},
+    {"role": "assistant", "content": "Maya is described as illusion..."}
+  ]
+}
+```
+
+**Response:**
+```json
+{
+  "summary": "User asked about maya. It was explained as an illusion that veils reality, as referenced in Swamini Vato Prakaran 2, Verse 75."
 }
 ```
 
@@ -383,7 +434,6 @@ GET /source/swamini_vato/2/75
 | **Gujarati/Hindi loops** | Small models loop on non-Latin scripts | 2-step translation via `llama3:8b` + repeat_penalty=1.3 |
 | **Embedding language** | `bge-small-en-v1.5` trained on English; GU/HI queries have lower retrieval quality | Issue queries in English for best results |
 | **Static corpus** | Knowledge base reflects scrape-time state of anirdesh.com | Checkpoint-safe scrapers allow full re-ingest |
-| **Context window** | Long chats don't carry history to LLM yet | Planned: rolling summary context |
 
 ---
 
