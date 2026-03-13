@@ -17,24 +17,19 @@ from dotenv import load_dotenv
 
 load_dotenv("../.env")
 
-# OpenRouter client — uses OpenAI-compatible API
+# Ollama local client — uses OpenAI-compatible API
 llm_client = OpenAI(
-    api_key=os.environ["OPENROUTER_API_KEY"],
-    base_url="https://openrouter.ai/api/v1",
+    api_key="ollama",
+    base_url="http://localhost:11434/v1",
 )
 
-CHROMA_DIR  = "../data/chromadb"
-EMBED_MODEL = "BAAI/bge-small-en-v1.5"
-TOP_K       = 4   # top matches per book
+CHROMA_DIR    = "../data/chromadb"
+EMBED_MODEL   = "BAAI/bge-small-en-v1.5"
+SCORE_THRESHOLD = 0.65  # only return docs with score above this
+MAX_QUERY_K   = 50      # fetch up to this many per book before filtering
 
-# Free models in priority order — tried one by one on failure
 FREE_MODELS = [
-    "stepfun/step-3.5-flash:free",
-    "google/gemma-3-12b-it:free",
-    "google/gemma-3-4b-it:free",
-    "google/gemma-3-27b-it:free",
-    "meta-llama/llama-3.3-70b-instruct:free",
-    "mistralai/mistral-small-3.1-24b-instruct:free",
+    "qwen2.5:3b",
 ]
 
 app = FastAPI(title="Swaminarayan RAG API")
@@ -54,6 +49,19 @@ chroma_client = chromadb.PersistentClient(path=CHROMA_DIR)
 collection = chroma_client.get_collection("swaminarayan_rag")
 print(f"Ready! {collection.count()} docs in ChromaDB.")
 
+# Load full text data for source lookup
+import json as _json
+DATA_DIR = "../data"
+with open(f"{DATA_DIR}/vachnamrut/vachnamrut_clean.json") as f:
+    _vachnamrut_data = _json.load(f)
+with open(f"{DATA_DIR}/swamini_vato/swamini_vato_clean.json") as f:
+    _swamini_vato_data = _json.load(f)
+
+# Build lookup indexes
+VACHNAMRUT_INDEX = {(v["loc"], str(v["vachno"])): v for v in _vachnamrut_data}
+SWAMINI_VATO_INDEX = {(str(v["prakaran"]), str(v["verse_no"])): v for v in _swamini_vato_data}
+print(f"Loaded {len(VACHNAMRUT_INDEX)} Vachnamrut + {len(SWAMINI_VATO_INDEX)} Swamini Vato entries.")
+
 
 SUPPORTED_LANGUAGES = {
     "english":  None,
@@ -72,18 +80,18 @@ def retrieve_documents(query: str) -> dict:
 
     vach_results = collection.query(
         query_embeddings=[query_embedding],
-        n_results=TOP_K,
+        n_results=MAX_QUERY_K,
         where={"book": "Vachnamrut"},
     )
 
     vato_results = collection.query(
         query_embeddings=[query_embedding],
-        n_results=TOP_K,
+        n_results=MAX_QUERY_K,
         where={"book": "Swamini Vato"},
     )
 
     return {
-        "vachnamrut":  vach_results,
+        "vachnamrut":   vach_results,
         "swamini_vato": vato_results,
     }
 
@@ -127,21 +135,25 @@ async def chat(request: ChatRequest):
     retrieved = retrieve_documents(request.query)
     prompt    = build_prompt(request.query, retrieved)
 
-    # Build sources separated by book
+    # Build sources separated by book, filtered by score threshold
     vachnamrut_sources = []
     for doc, meta, dist in zip(
         retrieved["vachnamrut"]["documents"][0],
         retrieved["vachnamrut"]["metadatas"][0],
         retrieved["vachnamrut"]["distances"][0],
     ):
-        vachnamrut_sources.append({
-            "book":      "Vachnamrut",
-            "reference": f"{meta.get('loc','')}-{meta.get('vachno','')}",
-            "title":     meta.get("title", ""),
-            "place":     meta.get("place", ""),
-            "text":      doc,
-            "score":     round(1 - dist, 3),
-        })
+        score = round(1 - dist, 3)
+        if score >= SCORE_THRESHOLD:
+            vachnamrut_sources.append({
+                "book":      "Vachnamrut",
+                "loc":       meta.get("loc", ""),
+                "vachno":    str(meta.get("vachno", "")),
+                "reference": f"{meta.get('loc','')}-{meta.get('vachno','')}",
+                "title":     meta.get("title", ""),
+                "place":     meta.get("place", ""),
+                "text":      doc,
+                "score":     score,
+            })
 
     swamini_vato_sources = []
     for doc, meta, dist in zip(
@@ -149,28 +161,26 @@ async def chat(request: ChatRequest):
         retrieved["swamini_vato"]["metadatas"][0],
         retrieved["swamini_vato"]["distances"][0],
     ):
-        swamini_vato_sources.append({
-            "book":     "Swamini Vato",
-            "prakaran": meta.get("prakaran", ""),
-            "verse_no": meta.get("verse_no", ""),
-            "reference": f"Prakaran {meta.get('prakaran','')}, Verse {meta.get('verse_no','')}",
-            "text":     doc,
-            "score":    round(1 - dist, 3),
-        })
+        score = round(1 - dist, 3)
+        if score >= SCORE_THRESHOLD:
+            swamini_vato_sources.append({
+                "book":     "Swamini Vato",
+                "prakaran": meta.get("prakaran", ""),
+                "verse_no": meta.get("verse_no", ""),
+                "reference": f"Prakaran {meta.get('prakaran','')}, Verse {meta.get('verse_no','')}",
+                "text":     doc,
+                "score":    score,
+            })
 
     # Sort each by relevance
-    vachnamrut_sources  = sorted(vachnamrut_sources,  key=lambda x: x["score"], reverse=True)
+    vachnamrut_sources   = sorted(vachnamrut_sources,   key=lambda x: x["score"], reverse=True)
     swamini_vato_sources = sorted(swamini_vato_sources, key=lambda x: x["score"], reverse=True)
     sources = sorted(vachnamrut_sources + swamini_vato_sources, key=lambda x: x["score"], reverse=True)
 
-    # Build single prompt that answers + translates in one call
     lang = request.language.lower()
     target_lang = SUPPORTED_LANGUAGES.get(lang)
 
-    if target_lang:
-        prompt += f"\n\nIMPORTANT: Write your answer in {target_lang}. Keep scripture references like 'Vachnamrut GI-1' or 'Swamini Vato Prakaran 1, Verse 5' in English as-is."
-
-    # Try each free model in order until one works
+    # Step 1: always generate answer in English (small models are stable in English)
     answer = None
     last_error = ""
     for model in FREE_MODELS:
@@ -179,7 +189,8 @@ async def chat(request: ChatRequest):
                 model=model,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.3,
-                max_tokens=2048,
+                max_tokens=1024,
+                extra_body={"options": {"repeat_penalty": 1.3}},
             )
             answer = response.choices[0].message.content
             break
@@ -189,6 +200,28 @@ async def chat(request: ChatRequest):
 
     if answer is None:
         raise HTTPException(status_code=429, detail=f"All LLM models are rate-limited. Please retry in a minute. ({last_error[:100]})")
+
+    # Step 2: translate if a non-English language was requested
+    if target_lang:
+        translate_prompt = (
+            f"Translate the following text into {target_lang}. "
+            f"Keep scripture references like 'Vachnamrut GI-1' or 'Swamini Vato Prakaran 1, Verse 5' in English as-is. "
+            f"Output only the translated text, nothing else.\n\n{answer}"
+        )
+        for model in FREE_MODELS:
+            try:
+                trans_response = llm_client.chat.completions.create(
+                    model=model,
+                    messages=[{"role": "user", "content": translate_prompt}],
+                    temperature=0.1,
+                    max_tokens=1024,
+                    extra_body={"options": {"repeat_penalty": 1.3}},
+                )
+                answer = trans_response.choices[0].message.content
+                break
+            except Exception as e:
+                last_error = str(e)
+                continue
 
     return {
         "answer":             answer,
@@ -202,6 +235,22 @@ async def chat(request: ChatRequest):
             "total":        len(sources),
         },
     }
+
+
+@app.get("/source/vachnamrut/{loc}/{vachno}")
+def get_vachnamrut(loc: str, vachno: str):
+    entry = VACHNAMRUT_INDEX.get((loc, vachno))
+    if not entry:
+        raise HTTPException(status_code=404, detail="Vachnamrut not found")
+    return entry
+
+
+@app.get("/source/swamini_vato/{prakaran}/{verse_no}")
+def get_swamini_vato(prakaran: str, verse_no: str):
+    entry = SWAMINI_VATO_INDEX.get((prakaran, verse_no))
+    if not entry:
+        raise HTTPException(status_code=404, detail="Swamini Vato verse not found")
+    return entry
 
 
 @app.get("/health")
