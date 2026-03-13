@@ -73,6 +73,11 @@ SUPPORTED_LANGUAGES = {
 class ChatRequest(BaseModel):
     query: str
     language: str = "english"  # english | gujarati | hindi
+    history: str = ""           # rolling summary of previous messages
+
+
+class SummarizeRequest(BaseModel):
+    messages: list[dict]  # [{"role": "user"|"assistant", "content": "..."}]
 
 
 def retrieve_documents(query: str) -> dict:
@@ -96,7 +101,7 @@ def retrieve_documents(query: str) -> dict:
     }
 
 
-def build_prompt(query: str, retrieved: dict) -> str:
+def build_prompt(query: str, retrieved: dict, history: str = "") -> str:
     context_parts = []
 
     for doc, meta in zip(
@@ -115,13 +120,16 @@ def build_prompt(query: str, retrieved: dict) -> str:
 
     context = "\n\n---\n\n".join(context_parts)
 
+    history_block = f"\nCONVERSATION SO FAR:\n{history}\n" if history else ""
+
     return f"""You are a knowledgeable and respectful guide on Swaminarayan philosophy, trained on the sacred texts of Vachnamrut and Swamini Vato.
 
 Answer the user's question using ONLY the passages provided below.
 - Cite your sources clearly (e.g., "As stated in Vachnamrut GI-1..." or "Swamini Vato Prakaran 1, Verse 5 says...")
 - Provide a clear, thoughtful, and respectful explanation
 - If the passages don't fully answer the question, say so honestly
-
+- Use the conversation summary for context but base your answer on the passages
+{history_block}
 RELEVANT PASSAGES:
 {context}
 
@@ -130,10 +138,43 @@ USER QUESTION: {query}
 ANSWER:"""
 
 
+@app.post("/summarize")
+async def summarize(request: SummarizeRequest):
+    if not request.messages:
+        return {"summary": ""}
+
+    convo = "\n".join(
+        f"{'User' if m['role'] == 'user' else 'Assistant'}: {m['content']}"
+        for m in request.messages
+    )
+
+    summarize_prompt = (
+        "Summarize the following conversation in 2-3 sentences. "
+        "Capture what the user asked and the key points answered. "
+        "Keep any scripture references like 'Vachnamrut GI-1' or 'Swamini Vato Prakaran 1, Verse 5' exactly as-is. "
+        "Output only the summary, nothing else.\n\n"
+        f"{convo}"
+    )
+
+    try:
+        response = llm_client.chat.completions.create(
+            model=FREE_MODELS[0],
+            messages=[{"role": "user", "content": summarize_prompt}],
+            temperature=0.1,
+            max_tokens=200,
+            extra_body={"options": {"repeat_penalty": 1.3}},
+        )
+        summary = response.choices[0].message.content.strip()
+    except Exception as e:
+        summary = ""
+
+    return {"summary": summary}
+
+
 @app.post("/chat")
 async def chat(request: ChatRequest):
     retrieved = retrieve_documents(request.query)
-    prompt    = build_prompt(request.query, retrieved)
+    prompt    = build_prompt(request.query, retrieved, request.history)
 
     # Build sources separated by book, filtered by score threshold
     vachnamrut_sources = []

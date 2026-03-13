@@ -39,6 +39,7 @@ interface Chat {
   id: string
   title: string
   messages: Message[]
+  summary: string   // rolling summary of all previous messages
   createdAt: number
 }
 
@@ -136,6 +137,7 @@ export function ChatPage() {
         id: Date.now().toString(),
         title: messageText.slice(0, 50),
         messages: [userMessage],
+        summary: '',
         createdAt: Date.now(),
       }
       updatedChats = [...chats, newChat]
@@ -155,10 +157,13 @@ export function ChatPage() {
     setIsLoading(true)
 
     try {
+      // Get current summary for this chat (empty on message 1)
+      const currentSummary = updatedChats.find(c => c.id === activeChatId)?.summary ?? ''
+
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: messageText, language }),
+        body: JSON.stringify({ message: messageText, language, history: currentSummary }),
       })
 
       const data = await response.json()
@@ -180,6 +185,28 @@ export function ChatPage() {
           : c
       )
       updateChats(updatedChats)
+
+      // Summarize all messages so far (runs in background, updates chat for next question)
+      const allMessages = updatedChats.find(c => c.id === activeChatId)?.messages ?? []
+      const messagesForSummary = allMessages
+        .filter(m => m.role === 'user' || m.role === 'assistant')
+        .map(m => ({ role: m.role, content: m.content }))
+
+      fetch('/api/summarize', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messages: messagesForSummary }),
+      }).then(r => r.json()).then(({ summary }) => {
+        if (summary) {
+          setChats(prev => {
+            const updated = prev.map(c =>
+              c.id === activeChatId ? { ...c, summary } : c
+            )
+            saveChats(updated)
+            return updated
+          })
+        }
+      }).catch(() => {})
     } catch (err: unknown) {
       const errMsg = err instanceof Error ? err.message : 'Something went wrong. Please try again.'
       const errorMessage: Message = {
