@@ -25,7 +25,7 @@ llm_client = OpenAI(
     api_key="ollama",
     base_url="http://localhost:11434/v1",
 )
-ANSWER_MODEL = "qwen2.5:3b"
+ANSWER_MODEL = "llama3:latest"
 
 # ── Retrieval config ──────────────────────────────────────────────────────────
 CHROMA_DIR           = "../data/chromadb"
