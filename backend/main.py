@@ -48,7 +48,8 @@ LANG_GT_CODE = {          # Google Translate target codes
     "hindi":    "hi",
 }
 
-TRANSLATE_CHUNK_SIZE = 4500   # chars per chunk (Google Translate limit ~5000)
+TRANSLATE_CHUNK_SIZE  = 4500  # chars per chunk (Google Translate limit ~5000)
+KEYWORD_TOP_K         = 5     # extra docs pulled per book via keyword search
 
 # ── App ───────────────────────────────────────────────────────────────────────
 app = FastAPI(title="AksharAI RAG API")
@@ -176,6 +177,68 @@ def _query_one_collection(lang: str, query_embedding: list[float]) -> dict:
     }
 
 
+_STOPWORDS = {
+    "who", "what", "where", "when", "why", "how", "is", "are", "was",
+    "the", "tell", "me", "about", "explain", "describe", "give", "does",
+    "did", "has", "have", "been", "can", "could", "would", "should",
+    "please", "briefly", "also", "some", "more", "any",
+}
+
+def extract_keywords(query: str) -> list[str]:
+    """Extract proper nouns / key terms for keyword search (words ≥ 4 chars, not stopwords)."""
+    words = query.replace("?", "").replace(",", "").split()
+    seen, result = set(), []
+    for w in words:
+        clean = w.strip("'\"").lower()
+        if len(clean) >= 4 and clean not in _STOPWORDS and clean not in seen:
+            seen.add(clean)
+            result.append(w.strip("'\""))   # original casing for $contains
+    return result
+
+
+def keyword_fetch(query: str) -> dict:
+    """
+    Fetch docs from the English collection that CONTAIN key terms from the query.
+    Returns merged unique results for Vachnamrut and Swamini Vato.
+    """
+    en_col = collections["english"]
+    keywords = extract_keywords(query)
+    if not keywords:
+        return {"vachnamrut": {"ids": [[]], "documents": [[]], "metadatas": [[]]},
+                "swamini_vato": {"ids": [[]], "documents": [[]], "metadatas": [[]]}}
+
+    seen_vach, seen_vato = set(), set()
+    vach_ids, vach_docs, vach_metas = [], [], []
+    vato_ids, vato_docs, vato_metas = [], [], []
+
+    for kw in keywords:
+        for book, seen, ids, docs, metas in [
+            ("Vachnamrut", seen_vach, vach_ids, vach_docs, vach_metas),
+            ("Swamini Vato", seen_vato, vato_ids, vato_docs, vato_metas),
+        ]:
+            try:
+                res = en_col.query(
+                    query_texts=[kw],          # ChromaDB text search
+                    n_results=KEYWORD_TOP_K,
+                    where={"book": book},
+                    where_document={"$contains": kw},
+                    include=["documents", "metadatas"],
+                )
+                for id_, doc, meta in zip(res["ids"][0], res["documents"][0], res["metadatas"][0]):
+                    if id_ not in seen:
+                        seen.add(id_)
+                        ids.append(id_)
+                        docs.append(doc)
+                        metas.append(meta)
+            except Exception:
+                pass
+
+    return {
+        "vachnamrut":   {"ids": [vach_ids], "documents": [vach_docs], "metadatas": [vach_metas]},
+        "swamini_vato": {"ids": [vato_ids], "documents": [vato_docs], "metadatas": [vato_metas]},
+    }
+
+
 def retrieve_best(query: str) -> dict:
     """
     Translate query into all 3 languages, query all 3 collections IN PARALLEL.
@@ -216,10 +279,7 @@ def retrieve_best(query: str) -> dict:
     print(f"  [retrieval] scores: { {r['lang']: round(r['relevance'],3) for r in results_list} }"
           f" → winner: {best['lang']} ({best['match_count']} matches above threshold)")
 
-    return {
-        "best":    best,
-        "english": results_by_lang["english"],  # always English for LLM prompt
-    }
+    return {"best": best}
 
 
 def build_sources(result: dict) -> tuple[list, list]:
@@ -265,8 +325,55 @@ def build_sources(result: dict) -> tuple[list, list]:
     return vachnamrut_sources, swamini_vato_sources
 
 
+def fetch_english_by_ids(vach_ids: list[str], vato_ids: list[str],
+                         kw_result: dict) -> dict:
+    """
+    Fetch the best-collection's top doc IDs from the English collection,
+    then prepend keyword-matched docs (deduped). LLM always reads English.
+    """
+    en_col = collections["english"]
+
+    vach_en = en_col.get(ids=vach_ids, include=["documents", "metadatas"]) if vach_ids else {"ids": [], "documents": [], "metadatas": []}
+    vato_en = en_col.get(ids=vato_ids, include=["documents", "metadatas"]) if vato_ids else {"ids": [], "documents": [], "metadatas": []}
+
+    def _reorder(result, ordered_ids):
+        by_id = {id_: (doc, meta) for id_, doc, meta in
+                 zip(result["ids"], result["documents"], result["metadatas"])}
+        docs, metas = [], []
+        for id_ in ordered_ids:
+            if id_ in by_id:
+                docs.append(by_id[id_][0])
+                metas.append(by_id[id_][1])
+        return docs, metas
+
+    vach_docs, vach_metas = _reorder(vach_en, vach_ids)
+    vato_docs, vato_metas = _reorder(vato_en, vato_ids)
+
+    # Prepend keyword results (they are most directly relevant to named entities)
+    # Dedup against already-included IDs
+    sem_vach_ids = set(vach_ids)
+    sem_vato_ids = set(vato_ids)
+
+    kw_vach_docs  = kw_result["vachnamrut"]["documents"][0]
+    kw_vach_metas = kw_result["vachnamrut"]["metadatas"][0]
+    kw_vach_ids_  = kw_result["vachnamrut"]["ids"][0]
+    kw_vato_docs  = kw_result["swamini_vato"]["documents"][0]
+    kw_vato_metas = kw_result["swamini_vato"]["metadatas"][0]
+    kw_vato_ids_  = kw_result["swamini_vato"]["ids"][0]
+
+    final_vach_docs  = [d for id_, d in zip(kw_vach_ids_, kw_vach_docs)  if id_ not in sem_vach_ids] + vach_docs
+    final_vach_metas = [m for id_, m in zip(kw_vach_ids_, kw_vach_metas) if id_ not in sem_vach_ids] + vach_metas
+    final_vato_docs  = [d for id_, d in zip(kw_vato_ids_, kw_vato_docs)  if id_ not in sem_vato_ids] + vato_docs
+    final_vato_metas = [m for id_, m in zip(kw_vato_ids_, kw_vato_metas) if id_ not in sem_vato_ids] + vato_metas
+
+    return {
+        "vachnamrut":   {"documents": [final_vach_docs], "metadatas": [final_vach_metas]},
+        "swamini_vato": {"documents": [final_vato_docs], "metadatas": [final_vato_metas]},
+    }
+
+
 def build_prompt(query: str, en_result: dict, history: str = "") -> str:
-    """Always build the prompt from English collection docs so LLM understands context."""
+    """Build prompt from English docs (LLM reads English reliably)."""
     context_parts = []
 
     for doc, meta in zip(
@@ -338,13 +445,22 @@ async def chat(request: ChatRequest):
     if lang not in LANG_COLLECTIONS:
         lang = "english"
 
-    # 1. Query all 3 collections in parallel
-    retrieved = retrieve_best(request.query)
-    best      = retrieved["best"]      # highest relevance → used for sources
-    en_result = retrieved["english"]   # English docs     → used for LLM prompt
+    # 1. Semantic search (all 3 collections) + keyword search — run in parallel
+    with ThreadPoolExecutor(max_workers=2) as ex:
+        f_sem = ex.submit(retrieve_best, request.query)
+        f_kw  = ex.submit(keyword_fetch, request.query)
+    retrieved  = f_sem.result()
+    kw_result  = f_kw.result()
+
+    best      = retrieved["best"]   # highest semantic relevance → drives sources
     best_lang = best["lang"]
 
-    # 2. Build prompt from English docs (LLM reads English reliably)
+    # 2. Take top semantic doc IDs from best collection + prepend keyword matches
+    #    All fetched from English collection so LLM always reads English text
+    vach_ids = best["vachnamrut"]["ids"][0][:PROMPT_TOP_K]
+    vato_ids = best["swamini_vato"]["ids"][0][:PROMPT_TOP_K]
+    en_result = fetch_english_by_ids(vach_ids, vato_ids, kw_result)
+
     prompt = build_prompt(request.query, en_result, request.history)
 
     # 3. Build sources from best-matching collection (native language, most relevant)
