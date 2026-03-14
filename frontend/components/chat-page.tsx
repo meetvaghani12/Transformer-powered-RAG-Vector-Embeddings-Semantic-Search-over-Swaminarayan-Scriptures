@@ -141,6 +141,8 @@ export function ChatPage() {
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [fullSource, setFullSource] = useState<FullSource | null>(null)
   const [loadingSource, setLoadingSource] = useState(false)
+  const [sourceLanguage, setSourceLanguage] = useState<string>('english')
+  const [pendingSourceRef, setPendingSourceRef] = useState<Source | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
@@ -256,7 +258,7 @@ export function ChatPage() {
             return updated
           })
         }
-      }).catch(() => {})
+      }).catch(() => { })
     } catch (err: unknown) {
       const errMsg = err instanceof Error ? err.message : 'Something went wrong. Please try again.'
       const errorMessage: Message = {
@@ -295,16 +297,16 @@ export function ChatPage() {
     setExpandedSources(new Set())
   }
 
-  const openFullSource = async (src: Source) => {
+  const fetchSource = async (src: Source, lang: string) => {
     setLoadingSource(true)
     setFullSource(null)
-    const params = new URLSearchParams({ book: src.book, lang: language })
+    const params = new URLSearchParams({ book: src.book, lang })
     if (src.book === 'Vachnamrut' && src.loc && src.vachno) {
       params.set('loc', src.loc)
       params.set('vachno', src.vachno)
     } else if (src.book === 'Swamini Vato' && src.prakaran && src.verse_no) {
-      params.set('prakaran', src.prakaran)
-      params.set('verse_no', src.verse_no)
+      params.set('prakaran', String(src.prakaran))
+      params.set('verse_no', String(src.verse_no))
     }
     try {
       const res = await fetch(`/api/source?${params}`, {
@@ -318,6 +320,13 @@ export function ChatPage() {
     } finally {
       setLoadingSource(false)
     }
+  }
+
+  const openFullSource = (src: Source) => {
+    const lang = language
+    setSourceLanguage(lang)
+    setPendingSourceRef(src)
+    fetchSource(src, lang)
   }
 
   const deleteChat = (id: string, e: React.MouseEvent) => {
@@ -433,11 +442,10 @@ export function ChatPage() {
                 variant="ghost"
                 size="sm"
                 onClick={() => setLanguage(lang.code)}
-                className={`px-3 py-1.5 text-xs font-medium rounded-md ${
-                  language === lang.code
-                    ? 'bg-secondary text-foreground'
-                    : 'text-muted-foreground hover:text-foreground'
-                }`}
+                className={`px-3 py-1.5 text-xs font-medium rounded-md ${language === lang.code
+                  ? 'bg-secondary text-foreground'
+                  : 'text-muted-foreground hover:text-foreground'
+                  }`}
               >
                 {lang.label}
               </Button>
@@ -587,14 +595,14 @@ export function ChatPage() {
       </div>
       {/* Full Source Modal */}
       {(loadingSource || fullSource) && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60" onClick={() => setFullSource(null)}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60" onClick={() => { setFullSource(null); setPendingSourceRef(null) }}>
           <div
             className="relative bg-background border border-border rounded-2xl w-full max-w-2xl max-h-[80vh] flex flex-col shadow-2xl"
             onClick={e => e.stopPropagation()}
           >
             {/* Modal header */}
             <div className="flex items-start justify-between px-6 py-4 border-b border-border shrink-0">
-              <div>
+              <div className="flex-1 min-w-0">
                 {fullSource && (
                   <>
                     <p className="text-xs text-muted-foreground mb-0.5">{fullSource.book}</p>
@@ -607,9 +615,35 @@ export function ChatPage() {
                   </>
                 )}
                 {loadingSource && <p className="text-sm text-muted-foreground">Loading...</p>}
+
+                {/* Language toggle */}
+                {pendingSourceRef && (
+                  <div className="flex items-center gap-1 mt-3">
+                    {[
+                      { code: 'english', label: 'EN' },
+                      { code: 'gujarati', label: 'GU' },
+                      { code: 'hindi', label: 'HI' },
+                    ].map(l => (
+                      <button
+                        key={l.code}
+                        onClick={() => {
+                          setSourceLanguage(l.code)
+                          fetchSource(pendingSourceRef, l.code)
+                        }}
+                        className={`px-2.5 py-0.5 text-xs rounded-md border transition-colors ${
+                          sourceLanguage === l.code
+                            ? 'bg-foreground text-background border-foreground'
+                            : 'border-border text-muted-foreground hover:text-foreground'
+                        }`}
+                      >
+                        {l.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
               <button
-                onClick={() => setFullSource(null)}
+                onClick={() => { setFullSource(null); setPendingSourceRef(null) }}
                 className="ml-4 text-muted-foreground hover:text-foreground shrink-0"
               >
                 <X className="w-5 h-5" />
@@ -618,7 +652,8 @@ export function ChatPage() {
 
             {/* Modal body */}
             <div className="overflow-y-auto px-6 py-5">
-              {fullSource && renderSourceText(fullSource.text)}
+              {loadingSource && <p className="text-sm text-muted-foreground">Loading...</p>}
+              {!loadingSource && fullSource && renderSourceText(fullSource.text)}
             </div>
           </div>
         </div>
