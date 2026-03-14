@@ -178,8 +178,10 @@ def _query_one_collection(lang: str, query_embedding: list[float]) -> dict:
 
 def retrieve_best(query: str) -> dict:
     """
-    Translate the query into all 3 languages, query all 3 collections IN PARALLEL,
-    return the results from the collection with the highest relevance score.
+    Translate query into all 3 languages, query all 3 collections IN PARALLEL.
+    Returns:
+      - best:    collection with highest relevance score (used for sources shown to user)
+      - english: English collection result (always used for LLM prompt — LLM reads English)
     """
     # Step 1: translate query to all 3 languages in parallel
     def _translate_for(lang: str) -> tuple[str, str]:
@@ -202,17 +204,22 @@ def retrieve_best(query: str) -> dict:
         emb = embed_model.encode([translated_queries[lang]])[0].tolist()
         return _query_one_collection(lang, emb)
 
-    results: list[dict] = []
+    results_list: list[dict] = []
     with ThreadPoolExecutor(max_workers=3) as ex:
-        results = list(ex.map(_query_lang, LANG_COLLECTIONS.keys()))
+        results_list = list(ex.map(_query_lang, LANG_COLLECTIONS.keys()))
 
-    # Step 3: pick the collection with the highest relevance score
-    best = max(results, key=lambda r: r["relevance"])
+    results_by_lang = {r["lang"]: r for r in results_list}
 
-    print(f"  [retrieval] scores: { {r['lang']: round(r['relevance'],3) for r in results} }"
+    # Step 3: pick the collection with the highest relevance score (for sources)
+    best = max(results_list, key=lambda r: r["relevance"])
+
+    print(f"  [retrieval] scores: { {r['lang']: round(r['relevance'],3) for r in results_list} }"
           f" → winner: {best['lang']} ({best['match_count']} matches above threshold)")
 
-    return best
+    return {
+        "best":    best,
+        "english": results_by_lang["english"],  # always English for LLM prompt
+    }
 
 
 def build_sources(result: dict) -> tuple[list, list]:
@@ -258,19 +265,20 @@ def build_sources(result: dict) -> tuple[list, list]:
     return vachnamrut_sources, swamini_vato_sources
 
 
-def build_prompt(query: str, result: dict, history: str = "") -> str:
+def build_prompt(query: str, en_result: dict, history: str = "") -> str:
+    """Always build the prompt from English collection docs so LLM understands context."""
     context_parts = []
 
     for doc, meta in zip(
-        result["vachnamrut"]["documents"][0][:PROMPT_TOP_K],
-        result["vachnamrut"]["metadatas"][0][:PROMPT_TOP_K],
+        en_result["vachnamrut"]["documents"][0][:PROMPT_TOP_K],
+        en_result["vachnamrut"]["metadatas"][0][:PROMPT_TOP_K],
     ):
         ref = f"Vachnamrut {meta.get('loc','')}-{meta.get('vachno','')} — {meta.get('title','')}"
         context_parts.append(f"[{ref}]\n{doc[:600]}")
 
     for doc, meta in zip(
-        result["swamini_vato"]["documents"][0][:PROMPT_TOP_K],
-        result["swamini_vato"]["metadatas"][0][:PROMPT_TOP_K],
+        en_result["swamini_vato"]["documents"][0][:PROMPT_TOP_K],
+        en_result["swamini_vato"]["metadatas"][0][:PROMPT_TOP_K],
     ):
         ref = f"Swamini Vato Prakaran {meta.get('prakaran','')}, Verse {meta.get('verse_no','')}"
         context_parts.append(f"[{ref}]\n{doc[:600]}")
@@ -330,14 +338,16 @@ async def chat(request: ChatRequest):
     if lang not in LANG_COLLECTIONS:
         lang = "english"
 
-    # 1. Query all 3 collections in parallel, pick the best
-    best = retrieve_best(request.query)
+    # 1. Query all 3 collections in parallel
+    retrieved = retrieve_best(request.query)
+    best      = retrieved["best"]      # highest relevance → used for sources
+    en_result = retrieved["english"]   # English docs     → used for LLM prompt
     best_lang = best["lang"]
 
-    # 2. Build prompt (always in English — LLM is stable in English)
-    prompt = build_prompt(request.query, best, request.history)
+    # 2. Build prompt from English docs (LLM reads English reliably)
+    prompt = build_prompt(request.query, en_result, request.history)
 
-    # 3. Build sources from winning collection
+    # 3. Build sources from best-matching collection (native language, most relevant)
     vachnamrut_sources, swamini_vato_sources = build_sources(best)
     sources = sorted(vachnamrut_sources + swamini_vato_sources,
                      key=lambda x: x["score"], reverse=True)
