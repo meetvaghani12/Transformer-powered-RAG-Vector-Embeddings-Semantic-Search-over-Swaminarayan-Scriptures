@@ -1,8 +1,8 @@
 """
-FastAPI RAG backend.
-- Embeds user query with local sentence-transformers model
-- Retrieves top-k docs from ChromaDB
-- Generates answer with OpenRouter (free models)
+FastAPI RAG backend — multilingual edition.
+- Embeds user query with paraphrase-multilingual-MiniLM-L12-v2 (384-dim, 50+ langs)
+- Retrieves docs from language-specific ChromaDB collection (en / gu / hi)
+- Generates answer with local Ollama (qwen2.5:3b)
 """
 
 import os
@@ -14,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
+from deep_translator import GoogleTranslator
 
 load_dotenv("../.env")
 
@@ -23,14 +24,39 @@ llm_client = OpenAI(
     base_url="http://localhost:11434/v1",
 )
 
-CHROMA_DIR    = "../data/chromadb"
-EMBED_MODEL   = "BAAI/bge-small-en-v1.5"
-SCORE_THRESHOLD = 0.65  # only return docs with score above this
-MAX_QUERY_K   = 50      # fetch up to this many per book before filtering
+CHROMA_DIR      = "../data/chromadb"
+EMBED_MODEL     = "paraphrase-multilingual-MiniLM-L12-v2"
+SCORE_THRESHOLD   = 0.45  # minimum score to include in sources (filters noise)
+MAX_SOURCES_PER_BOOK = 15 # cap sources per book shown to user
+PROMPT_TOP_K      = 8    # docs per book sent to LLM prompt
+MAX_QUERY_K       = 50   # total docs fetched from ChromaDB per book
 
-FREE_MODELS = [
-    "qwen2.5:3b",
-]
+ANSWER_MODEL = "qwen2.5:3b"
+
+# Language → ChromaDB collection name
+LANG_COLLECTIONS = {
+    "english":  "swaminarayan_rag_en",
+    "gujarati": "swaminarayan_rag_gu",
+    "hindi":    "swaminarayan_rag_hi",
+}
+
+# Language → Google Translate target code (None = keep as English)
+LANG_TRANSLATE_CODE = {
+    "english":  None,
+    "gujarati": "gu",
+    "hindi":    "hi",
+}
+
+
+def translate_query(query: str, lang: str) -> str:
+    """Translate query into the collection language for better semantic match."""
+    target = LANG_TRANSLATE_CODE.get(lang)
+    if not target:
+        return query
+    try:
+        return GoogleTranslator(source="auto", target=target).translate(query) or query
+    except Exception:
+        return query  # fallback to original on any error
 
 app = FastAPI(title="Swaminarayan RAG API")
 
@@ -42,32 +68,43 @@ app.add_middleware(
 )
 
 # Load models once at startup
-print("Loading embedding model...")
+print("Loading multilingual embedding model...")
 embed_model = SentenceTransformer(EMBED_MODEL)
 print("Connecting to ChromaDB...")
 chroma_client = chromadb.PersistentClient(path=CHROMA_DIR)
-collection = chroma_client.get_collection("swaminarayan_rag")
-print(f"Ready! {collection.count()} docs in ChromaDB.")
 
-# Load full text data for source lookup
+# Load all 3 language collections
+collections = {
+    lang: chroma_client.get_collection(col_name)
+    for lang, col_name in LANG_COLLECTIONS.items()
+}
+for lang, col in collections.items():
+    print(f"  [{lang}] {col.name}: {col.count()} docs")
+print("ChromaDB ready.")
+
+# Load full text data for source lookup — all 3 languages
 import json as _json
 DATA_DIR = "../data"
-with open(f"{DATA_DIR}/vachnamrut/vachnamrut_clean.json") as f:
-    _vachnamrut_data = _json.load(f)
-with open(f"{DATA_DIR}/swamini_vato/swamini_vato_clean.json") as f:
-    _swamini_vato_data = _json.load(f)
 
-# Build lookup indexes
-VACHNAMRUT_INDEX = {(v["loc"], str(v["vachno"])): v for v in _vachnamrut_data}
-SWAMINI_VATO_INDEX = {(str(v["prakaran"]), str(v["verse_no"])): v for v in _swamini_vato_data}
-print(f"Loaded {len(VACHNAMRUT_INDEX)} Vachnamrut + {len(SWAMINI_VATO_INDEX)} Swamini Vato entries.")
-
-
-SUPPORTED_LANGUAGES = {
-    "english":  None,
-    "gujarati": "Gujarati",
-    "hindi":    "Hindi",
+_SOURCE_FILES = {
+    "english":  ("vachnamrut_clean.json", "swamini_vato_clean.json"),
+    "gujarati": ("vachnamrut_gu.json",    "swamini_vato_gu.json"),
+    "hindi":    ("vachnamrut_hi.json",    "swamini_vato_hi.json"),
 }
+
+VACHNAMRUT_INDEX:   dict[str, dict] = {}   # lang → {(loc, vachno): entry}
+SWAMINI_VATO_INDEX: dict[str, dict] = {}   # lang → {(prakaran, verse_no): entry}
+
+for _lang, (_vf, _sf) in _SOURCE_FILES.items():
+    with open(f"{DATA_DIR}/vachnamrut/{_vf}", encoding="utf-8") as f:
+        _vd = _json.load(f)
+    with open(f"{DATA_DIR}/swamini_vato/{_sf}", encoding="utf-8") as f:
+        _sd = _json.load(f)
+    VACHNAMRUT_INDEX[_lang]   = {(v["loc"], str(v["vachno"])): v for v in _vd}
+    SWAMINI_VATO_INDEX[_lang] = {(str(v["prakaran"]), str(v["verse_no"])): v for v in _sd}
+    print(f"  [{_lang}] {len(VACHNAMRUT_INDEX[_lang])} Vachnamrut + {len(SWAMINI_VATO_INDEX[_lang])} Swamini Vato entries")
+
+print("Source indexes ready.")
 
 
 class ChatRequest(BaseModel):
@@ -80,16 +117,18 @@ class SummarizeRequest(BaseModel):
     messages: list[dict]  # [{"role": "user"|"assistant", "content": "..."}]
 
 
-def retrieve_documents(query: str) -> dict:
-    query_embedding = embed_model.encode([query])[0].tolist()
+def retrieve_documents(query: str, lang: str) -> dict:
+    col = collections[lang]
+    translated_query = translate_query(query, lang)
+    query_embedding = embed_model.encode([translated_query])[0].tolist()
 
-    vach_results = collection.query(
+    vach_results = col.query(
         query_embeddings=[query_embedding],
         n_results=MAX_QUERY_K,
         where={"book": "Vachnamrut"},
     )
 
-    vato_results = collection.query(
+    vato_results = col.query(
         query_embeddings=[query_embedding],
         n_results=MAX_QUERY_K,
         where={"book": "Swamini Vato"},
@@ -105,15 +144,15 @@ def build_prompt(query: str, retrieved: dict, history: str = "") -> str:
     context_parts = []
 
     for doc, meta in zip(
-        retrieved["vachnamrut"]["documents"][0],
-        retrieved["vachnamrut"]["metadatas"][0],
+        retrieved["vachnamrut"]["documents"][0][:PROMPT_TOP_K],
+        retrieved["vachnamrut"]["metadatas"][0][:PROMPT_TOP_K],
     ):
         ref = f"Vachnamrut {meta.get('loc','')}-{meta.get('vachno','')} — {meta.get('title','')}"
         context_parts.append(f"[{ref}]\n{doc[:600]}")
 
     for doc, meta in zip(
-        retrieved["swamini_vato"]["documents"][0],
-        retrieved["swamini_vato"]["metadatas"][0],
+        retrieved["swamini_vato"]["documents"][0][:PROMPT_TOP_K],
+        retrieved["swamini_vato"]["metadatas"][0][:PROMPT_TOP_K],
     ):
         ref = f"Swamini Vato Prakaran {meta.get('prakaran','')}, Verse {meta.get('verse_no','')}"
         context_parts.append(f"[{ref}]\n{doc[:600]}")
@@ -158,7 +197,7 @@ async def summarize(request: SummarizeRequest):
 
     try:
         response = llm_client.chat.completions.create(
-            model=FREE_MODELS[0],
+            model=ANSWER_MODEL,
             messages=[{"role": "user", "content": summarize_prompt}],
             temperature=0.1,
             max_tokens=200,
@@ -173,7 +212,11 @@ async def summarize(request: SummarizeRequest):
 
 @app.post("/chat")
 async def chat(request: ChatRequest):
-    retrieved = retrieve_documents(request.query)
+    lang = request.language.lower()
+    if lang not in LANG_COLLECTIONS:
+        lang = "english"
+
+    retrieved = retrieve_documents(request.query, lang)
     prompt    = build_prompt(request.query, retrieved, request.history)
 
     # Build sources separated by book, filtered by score threshold
@@ -213,56 +256,28 @@ async def chat(request: ChatRequest):
                 "score":    score,
             })
 
-    # Sort each by relevance
-    vachnamrut_sources   = sorted(vachnamrut_sources,   key=lambda x: x["score"], reverse=True)
-    swamini_vato_sources = sorted(swamini_vato_sources, key=lambda x: x["score"], reverse=True)
+    # Sort by relevance and cap per book
+    vachnamrut_sources   = sorted(vachnamrut_sources,   key=lambda x: x["score"], reverse=True)[:MAX_SOURCES_PER_BOOK]
+    swamini_vato_sources = sorted(swamini_vato_sources, key=lambda x: x["score"], reverse=True)[:MAX_SOURCES_PER_BOOK]
     sources = sorted(vachnamrut_sources + swamini_vato_sources, key=lambda x: x["score"], reverse=True)
 
-    lang = request.language.lower()
-    target_lang = SUPPORTED_LANGUAGES.get(lang)
-
-    # Step 1: always generate answer in English (small models are stable in English)
+    # Generate answer — docs are already in the correct language, no translation needed
     answer = None
     last_error = ""
-    for model in FREE_MODELS:
-        try:
-            response = llm_client.chat.completions.create(
-                model=model,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.3,
-                max_tokens=1024,
-                extra_body={"options": {"repeat_penalty": 1.3}},
-            )
-            answer = response.choices[0].message.content
-            break
-        except Exception as e:
-            last_error = str(e)
-            continue
+    try:
+        response = llm_client.chat.completions.create(
+            model=ANSWER_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3,
+            max_tokens=1024,
+            extra_body={"options": {"repeat_penalty": 1.3}},
+        )
+        answer = response.choices[0].message.content
+    except Exception as e:
+        last_error = str(e)
 
     if answer is None:
-        raise HTTPException(status_code=429, detail=f"All LLM models are rate-limited. Please retry in a minute. ({last_error[:100]})")
-
-    # Step 2: translate if a non-English language was requested
-    if target_lang:
-        translate_prompt = (
-            f"Translate the following text into {target_lang}. "
-            f"Keep scripture references like 'Vachnamrut GI-1' or 'Swamini Vato Prakaran 1, Verse 5' in English as-is. "
-            f"Output only the translated text, nothing else.\n\n{answer}"
-        )
-        for model in FREE_MODELS:
-            try:
-                trans_response = llm_client.chat.completions.create(
-                    model=model,
-                    messages=[{"role": "user", "content": translate_prompt}],
-                    temperature=0.1,
-                    max_tokens=1024,
-                    extra_body={"options": {"repeat_penalty": 1.3}},
-                )
-                answer = trans_response.choices[0].message.content
-                break
-            except Exception as e:
-                last_error = str(e)
-                continue
+        raise HTTPException(status_code=429, detail=f"LLM unavailable. Please retry. ({last_error[:100]})")
 
     return {
         "answer":             answer,
@@ -279,16 +294,20 @@ async def chat(request: ChatRequest):
 
 
 @app.get("/source/vachnamrut/{loc}/{vachno}")
-def get_vachnamrut(loc: str, vachno: str):
-    entry = VACHNAMRUT_INDEX.get((loc, vachno))
+def get_vachnamrut(loc: str, vachno: str, lang: str = "english"):
+    if lang not in VACHNAMRUT_INDEX:
+        lang = "english"
+    entry = VACHNAMRUT_INDEX[lang].get((loc, vachno))
     if not entry:
         raise HTTPException(status_code=404, detail="Vachnamrut not found")
     return entry
 
 
 @app.get("/source/swamini_vato/{prakaran}/{verse_no}")
-def get_swamini_vato(prakaran: str, verse_no: str):
-    entry = SWAMINI_VATO_INDEX.get((prakaran, verse_no))
+def get_swamini_vato(prakaran: str, verse_no: str, lang: str = "english"):
+    if lang not in SWAMINI_VATO_INDEX:
+        lang = "english"
+    entry = SWAMINI_VATO_INDEX[lang].get((prakaran, verse_no))
     if not entry:
         raise HTTPException(status_code=404, detail="Swamini Vato verse not found")
     return entry
@@ -297,8 +316,8 @@ def get_swamini_vato(prakaran: str, verse_no: str):
 @app.get("/health")
 def health():
     return {
-        "status":    "ok",
-        "documents": collection.count(),
+        "status": "ok",
+        "collections": {lang: col.count() for lang, col in collections.items()},
     }
 
 

@@ -248,7 +248,7 @@ export function ChatPage() {
   const openFullSource = async (src: Source) => {
     setLoadingSource(true)
     setFullSource(null)
-    const params = new URLSearchParams({ book: src.book })
+    const params = new URLSearchParams({ book: src.book, lang: language })
     if (src.book === 'Vachnamrut' && src.loc && src.vachno) {
       params.set('loc', src.loc)
       params.set('vachno', src.vachno)

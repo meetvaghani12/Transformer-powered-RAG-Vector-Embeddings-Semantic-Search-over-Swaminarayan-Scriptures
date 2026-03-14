@@ -9,12 +9,13 @@ export async function GET(request: NextRequest) {
   const vachno = searchParams.get('vachno')
   const prakaran = searchParams.get('prakaran')
   const verse_no = searchParams.get('verse_no')
+  const lang = searchParams.get('lang') || 'english'
 
   let endpoint = ''
   if (book === 'Vachnamrut' && loc && vachno) {
-    endpoint = `/source/vachnamrut/${loc}/${vachno}`
+    endpoint = `/source/vachnamrut/${loc}/${vachno}?lang=${lang}`
   } else if (book === 'Swamini Vato' && prakaran && verse_no) {
-    endpoint = `/source/swamini_vato/${prakaran}/${verse_no}`
+    endpoint = `/source/swamini_vato/${prakaran}/${verse_no}?lang=${lang}`
   } else {
     return NextResponse.json({ error: 'Invalid parameters' }, { status: 400 })
   }
