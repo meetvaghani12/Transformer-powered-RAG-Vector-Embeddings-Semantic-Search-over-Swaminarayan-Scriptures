@@ -372,6 +372,52 @@ def fetch_english_by_ids(vach_ids: list[str], vato_ids: list[str],
     }
 
 
+# Words that signal the query references previous context
+_REFERENCE_WORDS = {
+    "this", "that", "these", "those", "it", "its", "them", "they", "their",
+    "he", "she", "him", "her", "more", "same", "such", "above",
+    "mentioned", "aforementioned", "previous", "earlier",
+}
+
+def rewrite_query(query: str, history: str) -> str:
+    """
+    If the query references previous context (pronouns, "this word", "tell me more"),
+    rewrite it as a self-contained search query using the conversation history.
+    Returns the original query unchanged if no rewrite is needed.
+    """
+    if not history:
+        return query
+
+    query_words = set(query.lower().split())
+    if not (query_words & _REFERENCE_WORDS):
+        return query   # no references detected — skip rewrite
+
+    prompt = (
+        "Given the conversation history below and a follow-up question, "
+        "rewrite the follow-up as a fully self-contained search query. "
+        "Replace all pronouns and references with their actual subjects. "
+        "Output ONLY the rewritten query — no explanation, no punctuation changes.\n\n"
+        f"CONVERSATION HISTORY:\n{history}\n\n"
+        f"FOLLOW-UP QUESTION: {query}\n\n"
+        "REWRITTEN QUERY:"
+    )
+    try:
+        resp = llm_client.chat.completions.create(
+            model=ANSWER_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.0,
+            max_tokens=80,
+            extra_body={"options": {"repeat_penalty": 1.0}},
+        )
+        rewritten = resp.choices[0].message.content.strip().strip('"').strip("'")
+        if rewritten and len(rewritten) < 300:
+            return rewritten
+    except Exception:
+        pass
+
+    return query
+
+
 def build_prompt(query: str, en_result: dict, history: str = "") -> str:
     """Build prompt from English docs (LLM reads English reliably)."""
     context_parts = []
@@ -445,17 +491,23 @@ async def chat(request: ChatRequest):
     if lang not in LANG_COLLECTIONS:
         lang = "english"
 
-    # 1. Semantic search (all 3 collections) + keyword search — run in parallel
+    # 1. Rewrite query if it references previous context ("this word", "tell me more")
+    #    Rewritten query is used ONLY for retrieval — LLM still sees the original
+    retrieval_query = rewrite_query(request.query, request.history)
+    if retrieval_query != request.query:
+        print(f"  [rewrite] '{request.query}' → '{retrieval_query}'")
+
+    # 2. Semantic search (all 3 collections) + keyword search — run in parallel
     with ThreadPoolExecutor(max_workers=2) as ex:
-        f_sem = ex.submit(retrieve_best, request.query)
-        f_kw  = ex.submit(keyword_fetch, request.query)
+        f_sem = ex.submit(retrieve_best, retrieval_query)
+        f_kw  = ex.submit(keyword_fetch, retrieval_query)
     retrieved  = f_sem.result()
     kw_result  = f_kw.result()
 
     best      = retrieved["best"]   # highest semantic relevance → drives sources
     best_lang = best["lang"]
 
-    # 2. Take top semantic doc IDs from best collection + prepend keyword matches
+    # 3. Take top semantic doc IDs from best collection + prepend keyword matches
     #    All fetched from English collection so LLM always reads English text
     vach_ids = best["vachnamrut"]["ids"][0][:PROMPT_TOP_K]
     vato_ids = best["swamini_vato"]["ids"][0][:PROMPT_TOP_K]
@@ -463,12 +515,12 @@ async def chat(request: ChatRequest):
 
     prompt = build_prompt(request.query, en_result, request.history)
 
-    # 3. Build sources from best-matching collection (native language, most relevant)
+    # 4. Build sources from best-matching collection (native language, most relevant)
     vachnamrut_sources, swamini_vato_sources = build_sources(best)
     sources = sorted(vachnamrut_sources + swamini_vato_sources,
                      key=lambda x: x["score"], reverse=True)
 
-    # 4. Generate English answer
+    # 5. Generate English answer
     last_error = ""
     answer = None
     try:
@@ -487,11 +539,6 @@ async def chat(request: ChatRequest):
         raise HTTPException(status_code=429,
                             detail=f"LLM unavailable. Please retry. ({last_error[:100]})")
 
-    # 5. Translate answer to user's language if needed (chunked + parallel)
-    target_code = LANG_GT_CODE.get(lang)
-    if target_code:
-        answer = translate_to(answer, target_code)
-
     return {
         "answer":               answer,
         "language":             lang,
@@ -505,6 +552,19 @@ async def chat(request: ChatRequest):
             "total":        len(sources),
         },
     }
+
+
+class TranslateRequest(BaseModel):
+    text:   str
+    target: str   # "gu" or "hi"
+
+@app.post("/translate")
+async def translate_text(request: TranslateRequest):
+    code = request.target.lower()
+    if code not in ("gu", "hi"):
+        raise HTTPException(status_code=400, detail="target must be 'gu' or 'hi'")
+    translated = translate_to(request.text, code)
+    return {"translated": translated}
 
 
 @app.get("/source/vachnamrut/{loc}/{vachno}")

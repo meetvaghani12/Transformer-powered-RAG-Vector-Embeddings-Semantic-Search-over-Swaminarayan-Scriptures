@@ -24,6 +24,8 @@ interface Message {
   role: 'user' | 'assistant' | 'error'
   content: string
   sources?: Source[]
+  translations?: { gu?: string; hi?: string }
+  activeLang?: 'en' | 'gu' | 'hi'
 }
 
 interface FullSource {
@@ -132,12 +134,13 @@ function renderSourceText(text: string) {
 }
 
 export function ChatPage() {
-  const { t, language, setLanguage } = useLanguage()
+  const { t } = useLanguage()
   const [chats, setChats] = useState<Chat[]>([])
   const [currentChatId, setCurrentChatId] = useState<string | null>(null)
   const [input, setInput] = useState('')
   const [isLoading, setIsLoading] = useState(false)
   const [expandedSources, setExpandedSources] = useState<Set<string>>(new Set())
+  const [translatingIds, setTranslatingIds] = useState<Set<string>>(new Set())
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [fullSource, setFullSource] = useState<FullSource | null>(null)
   const [loadingSource, setLoadingSource] = useState(false)
@@ -209,13 +212,14 @@ export function ChatPage() {
     setIsLoading(true)
 
     try {
-      // Get current summary for this chat (empty on message 1)
-      const currentSummary = updatedChats.find(c => c.id === activeChatId)?.summary ?? ''
+      // Read summary directly from localStorage — avoids race condition where
+      // React state hasn't re-rendered yet after the background summarize call.
+      const currentSummary = loadChats().find(c => c.id === activeChatId)?.summary ?? ''
 
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: messageText, language, history: currentSummary }),
+        body: JSON.stringify({ message: messageText, history: currentSummary }),
       })
 
       const data = await response.json()
@@ -323,10 +327,89 @@ export function ChatPage() {
   }
 
   const openFullSource = (src: Source) => {
-    const lang = language
-    setSourceLanguage(lang)
+    setSourceLanguage('english')
     setPendingSourceRef(src)
-    fetchSource(src, lang)
+    fetchSource(src, 'english')
+  }
+
+  const handleTranslate = async (msgId: string, targetLang: 'en' | 'gu' | 'hi') => {
+    // Switching back to EN — just update activeLang
+    if (targetLang === 'en') {
+      setChats(prev => {
+        const updated = prev.map(c => ({
+          ...c,
+          messages: c.messages.map(m => m.id === msgId ? { ...m, activeLang: 'en' as const } : m),
+        }))
+        saveChats(updated)
+        return updated
+      })
+      return
+    }
+
+    // Check cache first
+    const msg = chats.flatMap(c => c.messages).find(m => m.id === msgId)
+    if (!msg) return
+    if (msg.translations?.[targetLang]) {
+      setChats(prev => {
+        const updated = prev.map(c => ({
+          ...c,
+          messages: c.messages.map(m => m.id === msgId ? { ...m, activeLang: targetLang } : m),
+        }))
+        saveChats(updated)
+        return updated
+      })
+      return
+    }
+
+    // Set activeLang optimistically + mark as loading
+    setChats(prev => {
+      const updated = prev.map(c => ({
+        ...c,
+        messages: c.messages.map(m => m.id === msgId ? { ...m, activeLang: targetLang } : m),
+      }))
+      saveChats(updated)
+      return updated
+    })
+    setTranslatingIds(prev => new Set(prev).add(msgId))
+
+    try {
+      const res = await fetch('/api/translate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: msg.content, target: targetLang }),
+      })
+      const data = await res.json()
+      if (data.translated) {
+        setChats(prev => {
+          const updated = prev.map(c => ({
+            ...c,
+            messages: c.messages.map(m =>
+              m.id === msgId
+                ? { ...m, translations: { ...m.translations, [targetLang]: data.translated }, activeLang: targetLang }
+                : m
+            ),
+          }))
+          saveChats(updated)
+          return updated
+        })
+      }
+    } catch {
+      // Translation failed — fall back to EN silently
+      setChats(prev => {
+        const updated = prev.map(c => ({
+          ...c,
+          messages: c.messages.map(m => m.id === msgId ? { ...m, activeLang: 'en' as const } : m),
+        }))
+        saveChats(updated)
+        return updated
+      })
+    } finally {
+      setTranslatingIds(prev => {
+        const next = new Set(prev)
+        next.delete(msgId)
+        return next
+      })
+    }
   }
 
   const deleteChat = (id: string, e: React.MouseEvent) => {
@@ -336,7 +419,7 @@ export function ChatPage() {
     if (currentChatId === id) setCurrentChatId(null)
   }
 
-  const languages = [
+  const langOptions = [
     { code: 'en' as const, label: 'EN' },
     { code: 'gu' as const, label: 'GU' },
     { code: 'hi' as const, label: 'HI' },
@@ -435,22 +518,6 @@ export function ChatPage() {
             <span className="font-medium text-foreground text-sm hidden sm:block">{t.nav.title}</span>
           </div>
 
-          <div className="flex items-center gap-1">
-            {languages.map((lang) => (
-              <Button
-                key={lang.code}
-                variant="ghost"
-                size="sm"
-                onClick={() => setLanguage(lang.code)}
-                className={`px-3 py-1.5 text-xs font-medium rounded-md ${language === lang.code
-                  ? 'bg-secondary text-foreground'
-                  : 'text-muted-foreground hover:text-foreground'
-                  }`}
-              >
-                {lang.label}
-              </Button>
-            ))}
-          </div>
         </header>
 
         {/* Messages */}
@@ -502,8 +569,35 @@ export function ChatPage() {
                         prose-code:text-primary prose-code:bg-muted prose-code:px-1 prose-code:rounded
                         prose-blockquote:border-l-primary prose-blockquote:text-muted-foreground">
                         <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                          {message.content}
+                          {(() => {
+                            const lang = message.activeLang ?? 'en'
+                            if (lang === 'gu') return message.translations?.gu ?? message.content
+                            if (lang === 'hi') return message.translations?.hi ?? message.content
+                            return message.content
+                          })()}
                         </ReactMarkdown>
+                      </div>
+
+                      {/* Per-message language toggle */}
+                      <div className="flex items-center gap-1 mt-2">
+                        {langOptions.map(l => {
+                          const isActive = (message.activeLang ?? 'en') === l.code
+                          const isLoading = translatingIds.has(message.id) && (message.activeLang ?? 'en') === l.code
+                          return (
+                            <button
+                              key={l.code}
+                              onClick={() => handleTranslate(message.id, l.code)}
+                              disabled={translatingIds.has(message.id)}
+                              className={`px-2.5 py-0.5 text-xs rounded-md border transition-colors disabled:opacity-50 ${
+                                isActive
+                                  ? 'bg-foreground text-background border-foreground'
+                                  : 'border-border text-muted-foreground hover:text-foreground'
+                              }`}
+                            >
+                              {isLoading ? '···' : l.label}
+                            </button>
+                          )
+                        })}
                       </div>
 
                       {message.sources && message.sources.length > 0 && (
