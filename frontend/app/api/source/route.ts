@@ -21,7 +21,9 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const res = await fetch(`${BACKEND_URL}${endpoint}`)
+    const res = await fetch(`${BACKEND_URL}${endpoint}`, {
+      signal: AbortSignal.timeout(10_000),
+    })
     if (!res.ok) return NextResponse.json({ error: 'Source not found' }, { status: 404 })
     const data = await res.json()
     return NextResponse.json(data)

@@ -307,11 +307,14 @@ export function ChatPage() {
       params.set('verse_no', src.verse_no)
     }
     try {
-      const res = await fetch(`/api/source?${params}`)
+      const res = await fetch(`/api/source?${params}`, {
+        signal: AbortSignal.timeout(10_000),
+      })
+      if (!res.ok) throw new Error('not found')
       const data = await res.json()
-      setFullSource(data)
+      if (data?.text) setFullSource(data)
     } catch {
-      // silently fail
+      // silently close modal on error or timeout
     } finally {
       setLoadingSource(false)
     }
