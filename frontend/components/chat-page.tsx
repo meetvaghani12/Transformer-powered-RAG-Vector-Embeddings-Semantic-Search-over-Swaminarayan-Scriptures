@@ -4,6 +4,8 @@ import { useState, useRef, useEffect } from 'react'
 import { useLanguage } from '@/lib/language-context'
 import { Button } from '@/components/ui/button'
 import { Send, Plus, BookOpen, ChevronDown, Trash2, PanelLeft, X, ExternalLink } from 'lucide-react'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 
 interface Source {
   book: string
@@ -431,9 +433,19 @@ export function ChatPage() {
                     </div>
                   ) : (
                     <div>
-                      <p className="text-foreground text-sm leading-7 whitespace-pre-wrap">
-                        {message.content}
-                      </p>
+                      <div className="prose prose-sm dark:prose-invert max-w-none
+                        prose-headings:font-semibold prose-headings:text-foreground
+                        prose-h1:text-xl prose-h2:text-lg prose-h3:text-base
+                        prose-p:text-foreground prose-p:leading-7
+                        prose-strong:text-foreground prose-strong:font-semibold
+                        prose-li:text-foreground prose-li:leading-7
+                        prose-ol:my-2 prose-ul:my-2
+                        prose-code:text-primary prose-code:bg-muted prose-code:px-1 prose-code:rounded
+                        prose-blockquote:border-l-primary prose-blockquote:text-muted-foreground">
+                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                          {message.content}
+                        </ReactMarkdown>
+                      </div>
 
                       {message.sources && message.sources.length > 0 && (
                         <div className="mt-3">
