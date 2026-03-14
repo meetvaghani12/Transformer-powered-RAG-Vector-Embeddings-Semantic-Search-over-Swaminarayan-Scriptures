@@ -568,9 +568,21 @@ export function ChatPage() {
             {/* Modal body */}
             <div className="overflow-y-auto px-6 py-5">
               {fullSource && (
-                <p className="text-sm text-foreground leading-8 whitespace-pre-wrap">
-                  {fullSource.text}
-                </p>
+                <div className="text-sm text-foreground leading-8">
+                  {fullSource.text
+                    // preserve real paragraph breaks, collapse inline \n to space
+                    .replace(/\n\n/g, '\u2060\n\n\u2060')
+                    .replace(/\n/g, ' ')
+                    .replace(/\u2060\n\n\u2060/g, '\n\n')
+                    .replace(/ {2,}/g, ' ')
+                    .split('\n\n')
+                    .map((para, i) => (
+                      <p key={i} className={i > 0 ? 'mt-4' : ''}>
+                        {para.trim()}
+                      </p>
+                    ))
+                  }
+                </div>
               )}
             </div>
           </div>
