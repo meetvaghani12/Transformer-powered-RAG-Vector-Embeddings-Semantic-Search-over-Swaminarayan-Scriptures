@@ -83,6 +83,54 @@ function groupChatsByDate(chats: Chat[]) {
   return groups.filter(g => g.chats.length > 0)
 }
 
+/**
+ * Render scraped source text with proper formatting.
+ * The scraper used get_text(separator="\n") which turned <i>word</i> into \nword\n.
+ * We detect those short segments surrounded by longer ones and restore them as <em>.
+ * \n\n = real paragraph break (Vachnamrut), lone \n = inline italic term (Swamini Vato).
+ */
+function renderSourceText(text: string) {
+  const paragraphs = text.split('\n\n')
+
+  return (
+    <div className="text-sm text-foreground leading-8">
+      {paragraphs.map((para, pIdx) => {
+        const parts = para.split('\n').map(p => p.trim()).filter(Boolean)
+
+        const nodes: React.ReactNode[] = []
+        parts.forEach((part, i) => {
+          const prevLen = i > 0 ? parts[i - 1].length : 9999
+          const nextLen = i < parts.length - 1 ? parts[i + 1].length : 9999
+          // A segment is an inline italic term if:
+          // - shorter than both neighbours
+          // - no slash or bracket (not a citation like "(4/48)" or "/")
+          // - only letters/spaces/diacritics (was originally <i>word</i>)
+          const isItalicTerm =
+            part.length < 40 &&
+            prevLen > part.length &&
+            nextLen > part.length &&
+            !/^[/()\d]/.test(part) &&
+            !part.includes('/') &&
+            /^[\p{L}\s\-']+$/u.test(part)
+
+          if (i > 0) nodes.push(' ')
+          if (isItalicTerm) {
+            nodes.push(<em key={i} className="italic text-muted-foreground">{part}</em>)
+          } else {
+            nodes.push(<span key={i}>{part}</span>)
+          }
+        })
+
+        return (
+          <p key={pIdx} className={pIdx > 0 ? 'mt-4' : ''}>
+            {nodes}
+          </p>
+        )
+      })}
+    </div>
+  )
+}
+
 export function ChatPage() {
   const { t, language, setLanguage } = useLanguage()
   const [chats, setChats] = useState<Chat[]>([])
@@ -567,23 +615,7 @@ export function ChatPage() {
 
             {/* Modal body */}
             <div className="overflow-y-auto px-6 py-5">
-              {fullSource && (
-                <div className="text-sm text-foreground leading-8">
-                  {fullSource.text
-                    // preserve real paragraph breaks, collapse inline \n to space
-                    .replace(/\n\n/g, '\u2060\n\n\u2060')
-                    .replace(/\n/g, ' ')
-                    .replace(/\u2060\n\n\u2060/g, '\n\n')
-                    .replace(/ {2,}/g, ' ')
-                    .split('\n\n')
-                    .map((para, i) => (
-                      <p key={i} className={i > 0 ? 'mt-4' : ''}>
-                        {para.trim()}
-                      </p>
-                    ))
-                  }
-                </div>
-              )}
+              {fullSource && renderSourceText(fullSource.text)}
             </div>
           </div>
         </div>
