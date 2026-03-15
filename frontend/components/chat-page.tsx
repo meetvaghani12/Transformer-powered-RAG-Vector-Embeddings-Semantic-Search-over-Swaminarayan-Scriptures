@@ -28,6 +28,7 @@ interface Message {
   sources?: Source[]
   translations?: { gu?: string; hi?: string }
   activeLang?: 'en' | 'gu' | 'hi'
+  suggestions?: string[]
 }
 
 interface FullSource {
@@ -296,6 +297,27 @@ export function ChatPage() {
       )
       updateChats(updatedChats)
       if (isLoggedIn) dbAddMessage(activeChatId!, assistantMessage)
+
+      // Background: fetch follow-up suggestions (non-blocking)
+      const msgId = assistantMessage.id
+      const capturedChatId = activeChatId!
+      fetch('/api/suggestions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: messageText, answer: data.answer }),
+      }).then(r => r.json()).then(({ questions }) => {
+        if (questions?.length) {
+          setChats(prev => {
+            const updated = prev.map(c =>
+              c.id === capturedChatId
+                ? { ...c, messages: c.messages.map(m => m.id === msgId ? { ...m, suggestions: questions } : m) }
+                : c
+            )
+            if (!isLoggedIn) saveChats(updated)
+            return updated
+          })
+        }
+      }).catch(() => {})
 
       // Summarize all messages so far (runs in background, updates chat for next question)
       const allMessages = updatedChats.find(c => c.id === activeChatId)?.messages ?? []
@@ -684,6 +706,22 @@ export function ChatPage() {
                           })()}
                         </ReactMarkdown>
                       </div>
+
+                      {/* Follow-up suggestions */}
+                      {message.suggestions && message.suggestions.length > 0 && (
+                        <div className="flex flex-wrap gap-2 mt-4">
+                          {message.suggestions.map((q, i) => (
+                            <button
+                              key={i}
+                              onClick={() => handleSubmit(q)}
+                              disabled={isLoading}
+                              className="text-xs text-muted-foreground border border-border rounded-xl px-3 py-1.5 hover:bg-secondary hover:text-foreground transition-colors disabled:opacity-40 text-left"
+                            >
+                              {q}
+                            </button>
+                          ))}
+                        </div>
+                      )}
 
                       {/* Per-message language toggle */}
                       <div className="flex items-center gap-1 mt-2">

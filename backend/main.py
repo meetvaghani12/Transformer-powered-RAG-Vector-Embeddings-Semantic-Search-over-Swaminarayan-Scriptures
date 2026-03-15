@@ -554,6 +554,41 @@ async def chat(request: ChatRequest):
     }
 
 
+class SuggestionsRequest(BaseModel):
+    query:  str
+    answer: str
+
+@app.post("/suggestions")
+async def suggestions(request: SuggestionsRequest):
+    prompt = (
+        "Based on this Q&A about Swaminarayan scriptures, suggest exactly 3 short follow-up questions "
+        "the user might want to ask next. Each question must be specific, curiosity-driven, and under 12 words.\n\n"
+        f"USER QUESTION: {request.query}\n\n"
+        f"ANSWER SUMMARY: {request.answer[:600]}\n\n"
+        "Output ONLY a JSON array of 3 strings, no explanation, no numbering. Example:\n"
+        '["Question one?", "Question two?", "Question three?"]'
+    )
+    try:
+        resp = llm_client.chat.completions.create(
+            model=ANSWER_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.7,
+            max_tokens=120,
+            extra_body={"options": {"repeat_penalty": 1.0}},
+        )
+        raw = resp.choices[0].message.content.strip()
+        # Extract JSON array robustly
+        start, end = raw.find('['), raw.rfind(']')
+        if start != -1 and end != -1:
+            import json as _json_mod
+            questions = _json_mod.loads(raw[start:end+1])
+            questions = [q for q in questions if isinstance(q, str)][:4]
+            return {"questions": questions}
+    except Exception:
+        pass
+    return {"questions": []}
+
+
 class TranslateRequest(BaseModel):
     text:   str
     target: str   # "gu" or "hi"
