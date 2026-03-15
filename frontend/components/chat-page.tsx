@@ -723,38 +723,41 @@ export function ChatPage() {
                         </div>
                       )}
 
-                      {/* Per-message language toggle */}
-                      <div className="flex items-center gap-1 mt-2">
-                        {langOptions.map(l => {
-                          const isActive = (message.activeLang ?? 'en') === l.code
-                          const isLoading = translatingIds.has(message.id) && (message.activeLang ?? 'en') === l.code
-                          return (
-                            <button
-                              key={l.code}
-                              onClick={() => handleTranslate(message.id, l.code)}
-                              disabled={translatingIds.has(message.id)}
-                              className={`px-2.5 py-0.5 text-xs rounded-md border transition-colors disabled:opacity-50 ${
-                                isActive
-                                  ? 'bg-foreground text-background border-foreground'
-                                  : 'border-border text-muted-foreground hover:text-foreground'
-                              }`}
-                            >
-                              {isLoading ? '···' : l.label}
-                            </button>
-                          )
-                        })}
-                      </div>
-
+                      {/* Sources row + language toggle on same line */}
                       {message.sources && message.sources.length > 0 && (
                         <div className="mt-3">
-                          <button
-                            onClick={() => toggleSource(message.id)}
-                            className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
-                          >
-                            <BookOpen className="w-3.5 h-3.5" />
-                            <span>View all sources ({message.sources.length})</span>
-                            <ChevronDown className={`w-3.5 h-3.5 transition-transform duration-200 ${expandedSources.has(message.id) ? 'rotate-180' : ''}`} />
-                          </button>
+                          <div className="flex items-center justify-between">
+                            <button
+                              onClick={() => toggleSource(message.id)}
+                              className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                            >
+                              <BookOpen className="w-3.5 h-3.5" />
+                              <span>View all sources ({message.sources.length})</span>
+                              <ChevronDown className={`w-3.5 h-3.5 transition-transform duration-200 ${expandedSources.has(message.id) ? 'rotate-180' : ''}`} />
+                            </button>
+
+                            {/* Language toggle — right side */}
+                            <div className="flex items-center gap-1">
+                              {langOptions.map(l => {
+                                const isActive = (message.activeLang ?? 'en') === l.code
+                                const isLoading = translatingIds.has(message.id) && (message.activeLang ?? 'en') === l.code
+                                return (
+                                  <button
+                                    key={l.code}
+                                    onClick={() => handleTranslate(message.id, l.code)}
+                                    disabled={translatingIds.has(message.id)}
+                                    className={`px-2.5 py-0.5 text-xs rounded-md border transition-colors disabled:opacity-50 ${
+                                      isActive
+                                        ? 'bg-foreground text-background border-foreground'
+                                        : 'border-border text-muted-foreground hover:text-foreground'
+                                    }`}
+                                  >
+                                    {isLoading ? '···' : l.label}
+                                  </button>
+                                )
+                              })}
+                            </div>
+                          </div>
 
                           {expandedSources.has(message.id) && (
                             <div className="mt-3 border-l-2 border-border pl-4 space-y-4">
@@ -782,6 +785,30 @@ export function ChatPage() {
                               ))}
                             </div>
                           )}
+                        </div>
+                      )}
+
+                      {/* Language toggle alone — only when there are no sources */}
+                      {(!message.sources || message.sources.length === 0) && (
+                        <div className="flex items-center gap-1 mt-3">
+                          {langOptions.map(l => {
+                            const isActive = (message.activeLang ?? 'en') === l.code
+                            const isLoading = translatingIds.has(message.id) && (message.activeLang ?? 'en') === l.code
+                            return (
+                              <button
+                                key={l.code}
+                                onClick={() => handleTranslate(message.id, l.code)}
+                                disabled={translatingIds.has(message.id)}
+                                className={`px-2.5 py-0.5 text-xs rounded-md border transition-colors disabled:opacity-50 ${
+                                  isActive
+                                    ? 'bg-foreground text-background border-foreground'
+                                    : 'border-border text-muted-foreground hover:text-foreground'
+                                }`}
+                              >
+                                {isLoading ? '···' : l.label}
+                              </button>
+                            )
+                          })}
                         </div>
                       )}
                     </div>
