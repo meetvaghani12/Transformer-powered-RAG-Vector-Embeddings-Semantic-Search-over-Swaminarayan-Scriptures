@@ -765,9 +765,9 @@ export function ChatPage() {
         </main>
 
         {/* Input */}
-        <div className="shrink-0 px-4 pb-5 pt-3">
+        <div className="shrink-0 px-4 pb-3 pt-2">
           <div className="max-w-3xl mx-auto">
-            <div className="flex items-end gap-2 bg-secondary rounded-2xl border border-border px-4 py-3 shadow-lg shadow-black/10">
+            <div className="flex items-center gap-2 bg-secondary rounded-2xl border border-border px-4 py-2 shadow-lg shadow-black/10">
               <textarea
                 ref={textareaRef}
                 value={input}
@@ -775,8 +775,8 @@ export function ChatPage() {
                 onKeyDown={handleKeyDown}
                 placeholder={t.chat.placeholder}
                 rows={1}
-                className="flex-1 bg-transparent text-foreground placeholder:text-muted-foreground resize-none focus:outline-none text-sm leading-relaxed"
-                style={{ minHeight: '24px', maxHeight: '200px' }}
+                className="flex-1 bg-transparent text-foreground placeholder:text-muted-foreground resize-none focus:outline-none text-sm leading-6"
+                style={{ minHeight: '24px', maxHeight: '160px' }}
               />
               <Button
                 onClick={() => handleSubmit()}
