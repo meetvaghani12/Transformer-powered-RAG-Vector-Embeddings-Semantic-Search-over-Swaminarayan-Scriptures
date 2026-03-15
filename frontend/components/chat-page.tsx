@@ -148,7 +148,7 @@ export function ChatPage() {
   const [isLoading, setIsLoading] = useState(false)
   const [expandedSources, setExpandedSources] = useState<Set<string>>(new Set())
   const [translatingIds, setTranslatingIds] = useState<Set<string>>(new Set())
-  const [sidebarOpen, setSidebarOpen] = useState(true)
+  const [sidebarOpen, setSidebarOpen] = useState(false)
   const [fullSource, setFullSource] = useState<FullSource | null>(null)
   const [loadingSource, setLoadingSource] = useState(false)
   const [sourceLanguage, setSourceLanguage] = useState<string>('english')
@@ -192,6 +192,11 @@ export function ChatPage() {
       body: JSON.stringify({ messageId, translations, activeLang }),
     })
   }
+
+  // Open sidebar by default only on desktop
+  useEffect(() => {
+    if (window.innerWidth >= 768) setSidebarOpen(true)
+  }, [])
 
   // Load chats — from DB if logged in, localStorage if anonymous
   useEffect(() => {
@@ -515,28 +520,54 @@ export function ChatPage() {
   return (
     <div className="flex h-screen bg-background overflow-hidden">
 
-      {/* Sidebar */}
+      {/* Mobile backdrop */}
+      {sidebarOpen && (
+        <div
+          className="fixed inset-0 z-30 bg-black/70 backdrop-blur-sm md:hidden"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
+
+      {/* Sidebar
+          Mobile  (<md): full-width fixed overlay drawer
+          Desktop (≥md): inline push layout, collapses to w-0             */}
       <aside
         className={`
-          flex flex-col shrink-0 border-r border-border bg-secondary/30
-          transition-all duration-300 overflow-hidden
-          ${sidebarOpen ? 'w-64' : 'w-0'}
+          fixed inset-y-0 left-0 z-40 flex flex-col border-r border-border bg-background
+          w-full sm:w-80
+          md:relative md:z-auto md:inset-auto md:bg-secondary/30 md:shrink-0 md:w-64
+          transition-all duration-300
+          ${sidebarOpen
+            ? 'translate-x-0 md:overflow-visible'
+            : '-translate-x-full md:translate-x-0 md:w-0 md:overflow-hidden'
+          }
         `}
       >
-        <div className="w-64 flex flex-col h-full">
+        <div className="flex flex-col h-full w-full">
           {/* Sidebar header */}
           <div className="flex items-center justify-between px-3 py-3 shrink-0">
             <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-1">
               Chats
             </span>
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={startNewChat}
-              className="h-7 w-7 text-muted-foreground hover:text-foreground"
-            >
-              <Plus className="w-4 h-4" />
-            </Button>
+            <div className="flex items-center gap-1">
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={startNewChat}
+                className="h-7 w-7 text-muted-foreground hover:text-foreground"
+              >
+                <Plus className="w-4 h-4" />
+              </Button>
+              {/* Close button — mobile only */}
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => setSidebarOpen(false)}
+                className="h-7 w-7 text-muted-foreground hover:text-foreground md:hidden"
+              >
+                <X className="w-4 h-4" />
+              </Button>
+            </div>
           </div>
 
           {/* Chat list */}
@@ -552,7 +583,11 @@ export function ChatPage() {
                   {group.chats.map(chat => (
                     <div
                       key={chat.id}
-                      onClick={() => { setCurrentChatId(chat.id); setExpandedSources(new Set()) }}
+                      onClick={() => {
+                        setCurrentChatId(chat.id)
+                        setExpandedSources(new Set())
+                        setSidebarOpen(false) // auto-close on mobile after selecting
+                      }}
                       className={`
                         group flex items-center justify-between px-2 py-2 rounded-lg cursor-pointer
                         text-sm truncate transition-colors
