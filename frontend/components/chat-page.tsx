@@ -647,10 +647,12 @@ export function ChatPage() {
                   className="flex items-center gap-2 px-3 py-1.5 rounded-xl hover:bg-secondary transition-colors"
                 >
                   <div className="w-7 h-7 rounded-full bg-foreground/10 border border-border flex items-center justify-center">
-                    <User className="w-3.5 h-3.5 text-foreground" />
+                    <span className="text-xs font-semibold text-foreground">
+                      {(session?.user?.email?.split('@')[0]?.[0] ?? '?').toUpperCase()}
+                    </span>
                   </div>
                   <span className="text-xs text-muted-foreground hidden sm:block max-w-[140px] truncate">
-                    {session?.user?.email}
+                    {session?.user?.email?.split('@')[0]}
                   </span>
                   <ChevronDown className="w-3.5 h-3.5 text-muted-foreground" />
                 </button>
