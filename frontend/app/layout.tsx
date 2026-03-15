@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from 'next'
 import { Inter, Cormorant_Garamond } from 'next/font/google'
 import { Analytics } from '@vercel/analytics/next'
+import { SessionProvider } from 'next-auth/react'
 import './globals.css'
 
 const inter = Inter({ 
@@ -54,7 +55,9 @@ export default function RootLayout({
   return (
     <html lang="en" className={`${inter.variable} ${cormorant.variable}`}>
       <body className="font-sans antialiased min-h-screen bg-background">
-        {children}
+        <SessionProvider>
+          {children}
+        </SessionProvider>
         <Analytics />
       </body>
     </html>

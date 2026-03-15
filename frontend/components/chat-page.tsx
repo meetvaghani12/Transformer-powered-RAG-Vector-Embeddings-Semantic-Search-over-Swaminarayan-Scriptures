@@ -2,8 +2,10 @@
 
 import { useState, useRef, useEffect } from 'react'
 import { useLanguage } from '@/lib/language-context'
+import { useSession, signOut } from 'next-auth/react'
 import { Button } from '@/components/ui/button'
-import { Send, Plus, BookOpen, ChevronDown, Trash2, PanelLeft, X, ExternalLink } from 'lucide-react'
+import { Send, Plus, BookOpen, ChevronDown, Trash2, PanelLeft, X, ExternalLink, LogIn, LogOut, User } from 'lucide-react'
+import Link from 'next/link'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
@@ -135,6 +137,10 @@ function renderSourceText(text: string) {
 
 export function ChatPage() {
   const { t } = useLanguage()
+  const { data: session } = useSession()
+  const isLoggedIn = !!session?.user?.id
+  const [userMenuOpen, setUserMenuOpen] = useState(false)
+
   const [chats, setChats] = useState<Chat[]>([])
   const [currentChatId, setCurrentChatId] = useState<string | null>(null)
   const [input, setInput] = useState('')
@@ -149,10 +155,56 @@ export function ChatPage() {
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
-  // Load from localStorage on mount
+  // ── DB helpers (used when logged in) ────────────────────────────────────────
+  const dbSaveChat = async (chat: Chat) => {
+    await fetch('/api/chats', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(chat),
+    })
+  }
+
+  const dbAddMessage = async (chatId: string, message: Message) => {
+    await fetch(`/api/chats/${chatId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ newMessage: message }),
+    })
+  }
+
+  const dbUpdateSummary = async (chatId: string, summary: string) => {
+    await fetch(`/api/chats/${chatId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ summary }),
+    })
+  }
+
+  const dbDeleteChat = async (chatId: string) => {
+    await fetch(`/api/chats/${chatId}`, { method: 'DELETE' })
+  }
+
+  const dbUpdateMessageTranslation = async (chatId: string, messageId: string, translations: object, activeLang: string) => {
+    await fetch(`/api/chats/${chatId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messageId, translations, activeLang }),
+    })
+  }
+
+  // Load chats — from DB if logged in, localStorage if anonymous
   useEffect(() => {
-    setChats(loadChats())
-  }, [])
+    if (isLoggedIn) {
+      fetch('/api/chats')
+        .then(r => r.json())
+        .then(data => {
+          if (Array.isArray(data)) setChats(data)
+        })
+        .catch(() => {})
+    } else {
+      setChats(loadChats())
+    }
+  }, [isLoggedIn])
 
   const currentChat = chats.find(c => c.id === currentChatId) ?? null
   const messages = currentChat?.messages ?? []
@@ -170,7 +222,7 @@ export function ChatPage() {
 
   const updateChats = (updated: Chat[]) => {
     setChats(updated)
-    saveChats(updated)
+    if (!isLoggedIn) saveChats(updated)
   }
 
   const handleSubmit = async (question?: string) => {
@@ -199,6 +251,7 @@ export function ChatPage() {
       activeChatId = newChat.id
       setCurrentChatId(activeChatId)
       updateChats(updatedChats)
+      if (isLoggedIn) dbSaveChat(newChat)
     } else {
       updatedChats = updatedChats.map(c =>
         c.id === activeChatId
@@ -206,6 +259,7 @@ export function ChatPage() {
           : c
       )
       updateChats(updatedChats)
+      if (isLoggedIn) dbAddMessage(activeChatId, userMessage)
     }
 
     setInput('')
@@ -241,6 +295,7 @@ export function ChatPage() {
           : c
       )
       updateChats(updatedChats)
+      if (isLoggedIn) dbAddMessage(activeChatId!, assistantMessage)
 
       // Summarize all messages so far (runs in background, updates chat for next question)
       const allMessages = updatedChats.find(c => c.id === activeChatId)?.messages ?? []
@@ -258,9 +313,10 @@ export function ChatPage() {
             const updated = prev.map(c =>
               c.id === activeChatId ? { ...c, summary } : c
             )
-            saveChats(updated)
+            if (!isLoggedIn) saveChats(updated)
             return updated
           })
+          if (isLoggedIn && activeChatId) dbUpdateSummary(activeChatId, summary)
         }
       }).catch(() => { })
     } catch (err: unknown) {
@@ -381,15 +437,21 @@ export function ChatPage() {
       const data = await res.json()
       if (data.translated) {
         setChats(prev => {
-          const updated = prev.map(c => ({
-            ...c,
-            messages: c.messages.map(m =>
-              m.id === msgId
-                ? { ...m, translations: { ...m.translations, [targetLang]: data.translated }, activeLang: targetLang }
-                : m
-            ),
-          }))
-          saveChats(updated)
+          const updated = prev.map(c => {
+            const hasMsg = c.messages.some(m => m.id === msgId)
+            if (!hasMsg) return c
+            const newTranslations = { ...(c.messages.find(m => m.id === msgId)?.translations ?? {}), [targetLang]: data.translated }
+            if (isLoggedIn) dbUpdateMessageTranslation(c.id, msgId, newTranslations, targetLang)
+            return {
+              ...c,
+              messages: c.messages.map(m =>
+                m.id === msgId
+                  ? { ...m, translations: newTranslations, activeLang: targetLang }
+                  : m
+              ),
+            }
+          })
+          if (!isLoggedIn) saveChats(updated)
           return updated
         })
       }
@@ -417,6 +479,7 @@ export function ChatPage() {
     const updated = chats.filter(c => c.id !== id)
     updateChats(updated)
     if (currentChatId === id) setCurrentChatId(null)
+    if (isLoggedIn) dbDeleteChat(id)
   }
 
   const langOptions = [
@@ -518,6 +581,50 @@ export function ChatPage() {
             <span className="font-medium text-foreground text-sm hidden sm:block">{t.nav.title}</span>
           </div>
 
+          {/* User menu */}
+          <div className="relative">
+            {isLoggedIn ? (
+              <>
+                <button
+                  onClick={() => setUserMenuOpen(v => !v)}
+                  className="flex items-center gap-2 px-3 py-1.5 rounded-xl hover:bg-secondary transition-colors"
+                >
+                  <div className="w-7 h-7 rounded-full bg-foreground/10 border border-border flex items-center justify-center">
+                    <User className="w-3.5 h-3.5 text-foreground" />
+                  </div>
+                  <span className="text-xs text-muted-foreground hidden sm:block max-w-[140px] truncate">
+                    {session?.user?.email}
+                  </span>
+                  <ChevronDown className="w-3.5 h-3.5 text-muted-foreground" />
+                </button>
+                {userMenuOpen && (
+                  <>
+                    <div className="fixed inset-0 z-10" onClick={() => setUserMenuOpen(false)} />
+                    <div className="absolute right-0 top-full mt-1 z-20 w-48 bg-popover border border-border rounded-xl shadow-lg overflow-hidden">
+                      <div className="px-3 py-2.5 border-b border-border">
+                        <p className="text-xs text-muted-foreground truncate">{session?.user?.email}</p>
+                      </div>
+                      <button
+                        onClick={() => { setUserMenuOpen(false); signOut({ callbackUrl: '/' }) }}
+                        className="flex items-center gap-2 w-full px-3 py-2.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+                      >
+                        <LogOut className="w-3.5 h-3.5" />
+                        Sign out
+                      </button>
+                    </div>
+                  </>
+                )}
+              </>
+            ) : (
+              <Link
+                href="/auth/login"
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground border border-border rounded-xl hover:bg-secondary transition-colors"
+              >
+                <LogIn className="w-3.5 h-3.5" />
+                Sign in
+              </Link>
+            )}
+          </div>
         </header>
 
         {/* Messages */}

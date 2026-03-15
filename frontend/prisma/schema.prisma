@@ -1,0 +1,69 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String      @id @default(cuid())
+  email         String      @unique
+  passwordHash  String
+  emailVerified Boolean     @default(false)
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  chats         Chat[]
+  otpCodes      OTPCode[]
+  authTokens    AuthToken[]
+}
+
+model Chat {
+  id        String    @id @default(cuid())
+  userId    String
+  title     String
+  summary   String    @default("")
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  messages  Message[]
+}
+
+model Message {
+  id           String   @id @default(cuid())
+  chatId       String
+  role         String
+  content      String
+  sources      Json?
+  translations Json?
+  activeLang   String?
+  createdAt    DateTime @default(now())
+
+  chat         Chat     @relation(fields: [chatId], references: [id], onDelete: Cascade)
+}
+
+model OTPCode {
+  id        String   @id @default(cuid())
+  email     String
+  codeHash  String
+  purpose   String   // "signup" | "login"
+  expiresAt DateTime
+  used      Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  user      User     @relation(fields: [email], references: [email])
+}
+
+model AuthToken {
+  id        String   @id @default(cuid())
+  email     String
+  token     String   @unique
+  expiresAt DateTime
+  used      Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  user      User     @relation(fields: [email], references: [email])
+}
