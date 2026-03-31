@@ -1,0 +1,29 @@
+{
+  "name": "AksharAI",
+  "short_name": "AksharAI",
+  "description": "Transformer-powered RAG over Swaminarayan Scriptures — ask questions, get answers grounded in Vachanamrut & Swamini Vato",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#1a1a1a",
+  "theme_color": "#1a1a1a",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/icon-dark-32x32.png",
+      "sizes": "32x32",
+      "type": "image/png"
+    },
+    {
+      "src": "/apple-icon.png",
+      "sizes": "180x180",
+      "type": "image/png"
+    },
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["education", "books", "religion"]
+}

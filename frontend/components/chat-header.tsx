@@ -1,10 +1,11 @@
 "use client"
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useSession, signOut } from 'next-auth/react'
+import { useTheme } from 'next-themes'
 import { useLanguage } from '@/lib/language-context'
 import { Button } from '@/components/ui/button'
-import { Plus, PanelLeft, ChevronDown, LogIn, LogOut } from 'lucide-react'
+import { Plus, PanelLeft, ChevronDown, LogIn, LogOut, Sun, Moon } from 'lucide-react'
 import Link from 'next/link'
 import type { Chat } from '@/lib/chat-types'
 import { ChatExport } from '@/components/chat-export'
@@ -20,6 +21,9 @@ export function ChatHeader({ onToggleSidebar, onNewChat, currentChat }: ChatHead
   const { data: session } = useSession()
   const isLoggedIn = !!session?.user?.id
   const [userMenuOpen, setUserMenuOpen] = useState(false)
+  const { theme, setTheme, resolvedTheme } = useTheme()
+  const [mounted, setMounted] = useState(false)
+  useEffect(() => setMounted(true), [])
 
   return (
     <header className="flex items-center justify-between px-4 py-3 border-b border-border shrink-0">
@@ -43,6 +47,19 @@ export function ChatHeader({ onToggleSidebar, onNewChat, currentChat }: ChatHead
         <span className="font-medium text-foreground text-sm hidden sm:block">{t.nav.title}</span>
         <ChatExport chat={currentChat ?? null} />
       </div>
+
+      <div className="flex items-center gap-2">
+        {/* Theme toggle — only render after mount to avoid hydration mismatch */}
+        {mounted && (
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => setTheme(resolvedTheme === 'dark' ? 'light' : 'dark')}
+            className="text-muted-foreground hover:text-foreground h-8 w-8"
+          >
+            {resolvedTheme === 'dark' ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+          </Button>
+        )}
 
       {/* User menu */}
       <div className="relative">
@@ -89,6 +106,7 @@ export function ChatHeader({ onToggleSidebar, onNewChat, currentChat }: ChatHead
             Sign in
           </Link>
         )}
+      </div>
       </div>
     </header>
   )

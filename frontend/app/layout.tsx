@@ -2,6 +2,8 @@ import type { Metadata, Viewport } from 'next'
 import { Inter, Cormorant_Garamond } from 'next/font/google'
 import { Analytics } from '@vercel/analytics/next'
 import { SessionProvider } from 'next-auth/react'
+import { ThemeProvider } from '@/components/theme-provider'
+import { PWARegister } from '@/components/pwa-register'
 import './globals.css'
 
 const inter = Inter({ 
@@ -22,6 +24,7 @@ export const metadata: Metadata = {
   description: 'Transformer-powered RAG · Vector Embeddings · Semantic Search over Swaminarayan Scriptures. Ask questions, get answers grounded in Vachanamrut & Swamini Vato.',
   keywords: ['AksharAI', 'Vachanamrut', 'Swamini Vato', 'RAG', 'semantic search', 'vector embeddings', 'transformer', 'Swaminarayan'],
   authors: [{ name: 'AksharAI' }],
+  manifest: '/manifest.json',
   icons: {
     icon: [
       {
@@ -39,6 +42,11 @@ export const metadata: Metadata = {
     ],
     apple: '/apple-icon.png',
   },
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: 'black-translucent',
+    title: 'AksharAI',
+  },
 }
 
 export const viewport: Viewport = {
@@ -53,11 +61,14 @@ export default function RootLayout({
   children: React.ReactNode
 }>) {
   return (
-    <html lang="en" className={`${inter.variable} ${cormorant.variable}`}>
+    <html lang="en" className={`${inter.variable} ${cormorant.variable}`} suppressHydrationWarning>
       <body className="font-sans antialiased min-h-screen bg-background">
-        <SessionProvider>
-          {children}
-        </SessionProvider>
+        <ThemeProvider attribute="class" defaultTheme="dark" enableSystem disableTransitionOnChange>
+          <SessionProvider>
+            {children}
+          </SessionProvider>
+        </ThemeProvider>
+        <PWARegister />
         <Analytics />
       </body>
     </html>
