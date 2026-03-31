@@ -8,15 +8,20 @@ const LANGUAGE_MAP: Record<string, string> = {
   hi: 'hindi',
 }
 
+// Force Node.js runtime (not Edge) so we get proper streaming support
+export const runtime = 'nodejs'
+export const dynamic = 'force-dynamic'
+
 export async function POST(request: NextRequest) {
-  // Parse request body
   let message: string
   let language: string
+  let history: string
 
   try {
     const body = await request.json()
     message = body.message
     language = body.language ?? 'en'
+    history = body.history ?? ''
   } catch {
     return NextResponse.json({ error: 'Invalid request body.' }, { status: 400 })
   }
@@ -27,14 +32,17 @@ export async function POST(request: NextRequest) {
 
   const backendLanguage = LANGUAGE_MAP[language] ?? 'english'
 
-  // Call backend
   let backendRes: Response
   try {
-    backendRes = await fetch(`${BACKEND_URL}/chat`, {
+    backendRes = await fetch(`${BACKEND_URL}/chat/stream`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ query: message.trim(), language: backendLanguage }),
-      signal: AbortSignal.timeout(120_000), // 2 min timeout for slow local LLM
+      body: JSON.stringify({
+        query: message.trim(),
+        language: backendLanguage,
+        history,
+      }),
+      signal: AbortSignal.timeout(120_000),
     })
   } catch (err: unknown) {
     const isTimeout = err instanceof Error && err.name === 'TimeoutError'
@@ -42,13 +50,6 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(
       { error: isTimeout ? 'Request timed out. The model is taking too long — please try again.' : 'Could not reach the backend. Make sure it is running on port 8000.' },
       { status: 503 }
-    )
-  }
-
-  if (backendRes.status === 429) {
-    return NextResponse.json(
-      { error: 'The model is rate-limited. Please wait a moment and try again.' },
-      { status: 429 }
     )
   }
 
@@ -62,20 +63,38 @@ export async function POST(request: NextRequest) {
     )
   }
 
-  let data: { answer?: string; sources?: unknown[]; total_matches?: unknown }
-  try {
-    data = await backendRes.json()
-  } catch {
-    return NextResponse.json({ error: 'Received an invalid response from the backend.' }, { status: 502 })
-  }
+  // Create a ReadableStream that forwards chunks from the backend SSE
+  const encoder = new TextEncoder()
+  const stream = new ReadableStream({
+    async start(controller) {
+      const reader = backendRes.body?.getReader()
+      if (!reader) {
+        controller.enqueue(encoder.encode('event: error\ndata: {"error":"No backend stream"}\n\n'))
+        controller.close()
+        return
+      }
 
-  if (!data.answer) {
-    return NextResponse.json({ error: 'The model returned an empty answer. Please try again.' }, { status: 502 })
-  }
+      try {
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+          controller.enqueue(value)
+        }
+      } catch (err) {
+        console.error('Stream relay error:', err)
+      } finally {
+        controller.close()
+        reader.releaseLock()
+      }
+    },
+  })
 
-  return NextResponse.json({
-    answer: data.answer,
-    sources: data.sources ?? [],
-    total_matches: data.total_matches,
+  return new Response(stream, {
+    headers: {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache, no-transform',
+      'Connection': 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    },
   })
 }

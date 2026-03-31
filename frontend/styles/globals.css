@@ -123,3 +123,44 @@
     @apply bg-background text-foreground;
   }
 }
+
+/* ChatGPT-style thinking indicator */
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+@keyframes dotBounce {
+  0%, 80%, 100% { transform: scale(0.4); opacity: 0.3; }
+  40% { transform: scale(1); opacity: 1; }
+}
+
+.thinking-shimmer {
+  background: linear-gradient(
+    90deg,
+    hsl(var(--muted-foreground) / 0.08) 25%,
+    hsl(var(--muted-foreground) / 0.2) 50%,
+    hsl(var(--muted-foreground) / 0.08) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.5s ease-in-out infinite;
+}
+
+.thinking-dot {
+  animation: dotBounce 1.4s ease-in-out infinite;
+}
+
+/* Typewriter cursor — blinks at end of streaming text */
+@keyframes cursorBlink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+.streaming-cursor::after {
+  content: '▋';
+  display: inline;
+  animation: cursorBlink 0.8s step-end infinite;
+  color: hsl(var(--foreground));
+  font-weight: 400;
+  margin-left: 1px;
+}

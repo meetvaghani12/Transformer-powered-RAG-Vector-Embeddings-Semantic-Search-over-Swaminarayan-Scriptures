@@ -1,40 +1,49 @@
 'use client'
 
-import { useState } from 'react'
-import { signIn } from 'next-auth/react'
+import { useForm } from 'react-hook-form'
+import { zodResolver } from '@hookform/resolvers/zod'
+import { z } from 'zod'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
+import { useState } from 'react'
+
+const loginSchema = z.object({
+  email: z.string().email('Please enter a valid email'),
+  password: z.string().min(1, 'Password is required'),
+})
+
+type LoginForm = z.infer<typeof loginSchema>
 
 export default function LoginPage() {
   const router = useRouter()
-  const [email, setEmail] = useState('')
-  const [password, setPassword] = useState('')
-  const [error, setError] = useState('')
-  const [loading, setLoading] = useState(false)
+  const [serverError, setServerError] = useState('')
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    setError('')
-    setLoading(true)
+  const {
+    register,
+    handleSubmit,
+    formState: { errors, isSubmitting },
+  } = useForm<LoginForm>({
+    resolver: zodResolver(loginSchema),
+  })
 
+  const onSubmit = async (data: LoginForm) => {
+    setServerError('')
     try {
       const res = await fetch('/api/auth/login-request', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify(data),
       })
-      const data = await res.json()
+      const result = await res.json()
 
       if (!res.ok) {
-        setError(data.error || 'Something went wrong')
+        setServerError(result.error || 'Something went wrong')
         return
       }
 
-      router.push(`/auth/verify?purpose=login&email=${encodeURIComponent(email)}`)
+      router.push(`/auth/verify?purpose=login&email=${encodeURIComponent(data.email)}`)
     } catch {
-      setError('Something went wrong. Please try again.')
-    } finally {
-      setLoading(false)
+      setServerError('Something went wrong. Please try again.')
     }
   }
 
@@ -42,52 +51,52 @@ export default function LoginPage() {
     <div className="min-h-screen bg-background flex items-center justify-center p-4">
       <div className="w-full max-w-sm">
 
-        {/* Logo */}
         <div className="text-center mb-8">
           <p className="text-5xl mb-3">ॐ</p>
           <h1 className="text-xl font-semibold text-foreground">AksharAI</h1>
           <p className="text-sm text-muted-foreground mt-1">Welcome back</p>
         </div>
 
-        {/* Card */}
         <div className="bg-card border border-border rounded-2xl p-6">
-          <form onSubmit={handleSubmit} className="space-y-4">
+          <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
             <div>
               <label className="block text-xs text-muted-foreground mb-1.5">Email</label>
               <input
                 type="email"
-                value={email}
-                onChange={e => setEmail(e.target.value)}
+                {...register('email')}
                 placeholder="you@example.com"
-                required
                 className="w-full bg-secondary border border-border rounded-xl px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
               />
+              {errors.email && (
+                <p className="text-xs text-destructive mt-1">{errors.email.message}</p>
+              )}
             </div>
 
             <div>
               <label className="block text-xs text-muted-foreground mb-1.5">Password</label>
               <input
                 type="password"
-                value={password}
-                onChange={e => setPassword(e.target.value)}
+                {...register('password')}
                 placeholder="••••••••"
-                required
                 className="w-full bg-secondary border border-border rounded-xl px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
               />
+              {errors.password && (
+                <p className="text-xs text-destructive mt-1">{errors.password.message}</p>
+              )}
             </div>
 
-            {error && (
+            {serverError && (
               <p className="text-xs text-destructive bg-destructive/10 border border-destructive/20 rounded-lg px-3 py-2">
-                {error}
+                {serverError}
               </p>
             )}
 
             <button
               type="submit"
-              disabled={loading}
+              disabled={isSubmitting}
               className="w-full bg-foreground text-background font-medium text-sm py-2.5 rounded-xl hover:bg-foreground/90 transition-colors disabled:opacity-50"
             >
-              {loading ? 'Sending code...' : 'Continue'}
+              {isSubmitting ? 'Sending code...' : 'Continue'}
             </button>
           </form>
         </div>

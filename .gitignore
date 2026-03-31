@@ -37,3 +37,6 @@ Thumbs.db
 *.log
 logs/
 tmp/
+
+### ChromaDB vector store (regenerate with: cd backend && python ingest.py --rebuild)
+data/chromadb/

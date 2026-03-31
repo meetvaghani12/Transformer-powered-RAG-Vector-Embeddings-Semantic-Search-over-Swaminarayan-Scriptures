@@ -1,49 +1,53 @@
 'use client'
 
-import { useState } from 'react'
+import { useForm } from 'react-hook-form'
+import { zodResolver } from '@hookform/resolvers/zod'
+import { z } from 'zod'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
+import { useState } from 'react'
+
+const signupSchema = z.object({
+  email: z.string().email('Please enter a valid email'),
+  password: z.string().min(8, 'Password must be at least 8 characters'),
+  confirm: z.string().min(1, 'Please confirm your password'),
+}).refine(data => data.password === data.confirm, {
+  message: 'Passwords do not match',
+  path: ['confirm'],
+})
+
+type SignupForm = z.infer<typeof signupSchema>
 
 export default function SignupPage() {
   const router = useRouter()
-  const [email, setEmail] = useState('')
-  const [password, setPassword] = useState('')
-  const [confirm, setConfirm] = useState('')
-  const [error, setError] = useState('')
-  const [loading, setLoading] = useState(false)
+  const [serverError, setServerError] = useState('')
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    setError('')
+  const {
+    register,
+    handleSubmit,
+    formState: { errors, isSubmitting },
+  } = useForm<SignupForm>({
+    resolver: zodResolver(signupSchema),
+  })
 
-    if (password !== confirm) {
-      setError('Passwords do not match')
-      return
-    }
-    if (password.length < 8) {
-      setError('Password must be at least 8 characters')
-      return
-    }
-
-    setLoading(true)
+  const onSubmit = async (data: SignupForm) => {
+    setServerError('')
     try {
       const res = await fetch('/api/auth/signup', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ email: data.email, password: data.password }),
       })
-      const data = await res.json()
+      const result = await res.json()
 
       if (!res.ok) {
-        setError(data.error || 'Something went wrong')
+        setServerError(result.error || 'Something went wrong')
         return
       }
 
-      router.push(`/auth/verify?purpose=signup&email=${encodeURIComponent(email)}`)
+      router.push(`/auth/verify?purpose=signup&email=${encodeURIComponent(data.email)}`)
     } catch {
-      setError('Something went wrong. Please try again.')
-    } finally {
-      setLoading(false)
+      setServerError('Something went wrong. Please try again.')
     }
   }
 
@@ -51,64 +55,65 @@ export default function SignupPage() {
     <div className="min-h-screen bg-background flex items-center justify-center p-4">
       <div className="w-full max-w-sm">
 
-        {/* Logo */}
         <div className="text-center mb-8">
           <p className="text-5xl mb-3">ॐ</p>
           <h1 className="text-xl font-semibold text-foreground">AksharAI</h1>
           <p className="text-sm text-muted-foreground mt-1">Create your account</p>
         </div>
 
-        {/* Card */}
         <div className="bg-card border border-border rounded-2xl p-6">
-          <form onSubmit={handleSubmit} className="space-y-4">
+          <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
             <div>
               <label className="block text-xs text-muted-foreground mb-1.5">Email</label>
               <input
                 type="email"
-                value={email}
-                onChange={e => setEmail(e.target.value)}
+                {...register('email')}
                 placeholder="you@example.com"
-                required
                 className="w-full bg-secondary border border-border rounded-xl px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
               />
+              {errors.email && (
+                <p className="text-xs text-destructive mt-1">{errors.email.message}</p>
+              )}
             </div>
 
             <div>
               <label className="block text-xs text-muted-foreground mb-1.5">Password</label>
               <input
                 type="password"
-                value={password}
-                onChange={e => setPassword(e.target.value)}
+                {...register('password')}
                 placeholder="Min. 8 characters"
-                required
                 className="w-full bg-secondary border border-border rounded-xl px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
               />
+              {errors.password && (
+                <p className="text-xs text-destructive mt-1">{errors.password.message}</p>
+              )}
             </div>
 
             <div>
               <label className="block text-xs text-muted-foreground mb-1.5">Confirm password</label>
               <input
                 type="password"
-                value={confirm}
-                onChange={e => setConfirm(e.target.value)}
+                {...register('confirm')}
                 placeholder="••••••••"
-                required
                 className="w-full bg-secondary border border-border rounded-xl px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
               />
+              {errors.confirm && (
+                <p className="text-xs text-destructive mt-1">{errors.confirm.message}</p>
+              )}
             </div>
 
-            {error && (
+            {serverError && (
               <p className="text-xs text-destructive bg-destructive/10 border border-destructive/20 rounded-lg px-3 py-2">
-                {error}
+                {serverError}
               </p>
             )}
 
             <button
               type="submit"
-              disabled={loading}
+              disabled={isSubmitting}
               className="w-full bg-foreground text-background font-medium text-sm py-2.5 rounded-xl hover:bg-foreground/90 transition-colors disabled:opacity-50"
             >
-              {loading ? 'Sending code...' : 'Create account'}
+              {isSubmitting ? 'Sending code...' : 'Create account'}
             </button>
           </form>
         </div>
